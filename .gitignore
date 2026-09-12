@@ -1,0 +1,28 @@
+# data — never commit personal messages
+data/raw/*
+data/interim/*
+data/processed/*
+!data/**/.gitkeep
+!data/dummy/
+outputs/
+*.jsonl
+!data/dummy/*.jsonl
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# models
+*.safetensors
+*.bin
+*.gguf
+checkpoints/
+adapters/
+
+.env
+.DS_Store

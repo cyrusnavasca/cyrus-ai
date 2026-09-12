@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "style-ft"
+version = "0.1.0"
+description = "Fine-tune an open LLM to write in my personal texting style"
+requires-python = ">=3.10"
+dependencies = ["anthropic>=0.40.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
