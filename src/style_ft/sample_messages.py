@@ -20,15 +20,14 @@ from __future__ import annotations
 
 import argparse
 import collections
-import hashlib
 import json
-import random
 import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable
 
 from .jsonlio import log, read_jsonl, write_jsonl
+from .rank import stable_rank
 
 # Conservative: a false positive costs one message out of tens of thousands.
 SENSITIVE_PATTERNS: dict[str, str] = {
@@ -46,12 +45,6 @@ _COMPILED = {k: re.compile(v, re.IGNORECASE) for k, v in SENSITIVE_PATTERNS.item
 
 def sensitive_hits(text: str) -> list[str]:
     return [name for name, pat in _COMPILED.items() if pat.search(text)]
-
-
-def _stable_rank(text: str, seed: str) -> float:
-    """Deterministic pseudo-random score in [0, 1) keyed by message content."""
-    digest = hashlib.sha256(f"{seed}:{text}".encode("utf-8")).digest()
-    return int.from_bytes(digest[:8], "big") / 2**64
 
 
 def sample(
@@ -120,7 +113,7 @@ def sample(
 
     picked: list[dict[str, Any]] = []
     for y in years:
-        ranked = sorted(by_year[y], key=lambda r: _stable_rank(r["text"], seed))
+        ranked = sorted(by_year[y], key=lambda r: stable_rank(r["text"], seed, "sample_messages"))
         picked.extend(ranked[: quotas[y]])
     picked.sort(key=lambda r: r.get("timestamp", ""))
 

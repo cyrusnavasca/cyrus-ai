@@ -21,12 +21,12 @@ from __future__ import annotations
 
 import argparse
 import collections
-import hashlib
 import sys
 from pathlib import Path
 from typing import Any, Iterable
 
 from .jsonlio import log, read_jsonl, write_jsonl
+from .rank import stable_rank
 
 
 def thread_summary(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -61,11 +61,6 @@ def _matches(thread: str, patterns: list[str]) -> bool:
     """Case-insensitive substring match; a thread id matches exactly too."""
     lowered = thread.lower()
     return any(p.lower() in lowered for p in patterns)
-
-
-def _stable_rank(text: str, seed: str) -> float:
-    digest = hashlib.sha256(f"{seed}:{text}".encode("utf-8")).digest()
-    return int.from_bytes(digest[:8], "big") / 2**64
 
 
 def select(
@@ -116,7 +111,7 @@ def select(
             # Cap only my messages; keep a deterministic random subset of them.
             outgoing = sorted(
                 (m for m in msgs if m.get("direction") == "out"),
-                key=lambda m: _stable_rank(m["text"], seed),
+                key=lambda m: stable_rank(m["text"], seed, "select_threads"),
             )[:max_per_thread]
             incoming = [m for m in msgs if m.get("direction") != "out"]
             stats["capped"] += mine_count - max_per_thread
