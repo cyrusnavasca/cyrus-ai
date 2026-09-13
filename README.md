@@ -12,6 +12,7 @@ macOS Messages chat.db          OR   raw export (csv/xml/json)
    │  style_ft.imessage_db             │  style_ft.parse_export
    └──────────────┬────────────────────┘
                   ▼                    → data/interim/messages.jsonl
+   │  style_ft.select_threads      → pick/cap conversations (--list to browse)
    │                                 {sender, text, timestamp, thread_id, direction}
    ▼
    │  style_ft.filter_messages     → data/processed/my_messages.jsonl
@@ -95,6 +96,14 @@ Without it the read fails with `operation not permitted` / `no such table: messa
 
 Note: `imessage-exporter` 4.2.0 only emits `txt` and `html` — there is no `csv`
 format — which is the other reason this reads the database directly.
+
+**Choosing conversations.** `style_ft.select_threads --list` ranks every thread by
+how many messages you wrote in it. One thread usually dominates a real corpus — if a
+single person is 40%+ of your outgoing messages, an uncapped fine-tune learns that
+relationship's register rather than your general style. `--max-per-thread N` caps any
+one conversation (capping only *your* messages, deterministically), `--include` /
+`--exclude` take substrings or exact thread ids, and `--kind dm|group` splits by
+conversation type.
 
 **Parsing file exports.** iMazing CSV, SMS Backup & Restore XML, and JSON/JSONL are auto-detected
 by extension. Column names are fuzzy-matched (case and punctuation insensitive);
