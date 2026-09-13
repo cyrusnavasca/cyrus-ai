@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from style_ft.imessage_db import (  # noqa: E402
     apple_time_to_iso,
     decode_attributed_body,
+    merge_similar,
     read_messages,
 )
 
@@ -25,9 +26,11 @@ CREATE TABLE message (
 );
 CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
 CREATE TABLE chat (
-    ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, style INTEGER
+    ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, style INTEGER,
+    guid TEXT
 );
 CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
 """
 
 
@@ -45,8 +48,13 @@ def build_db(path: Path) -> None:
     con = sqlite3.connect(path)
     con.executescript(SCHEMA)
     con.execute("INSERT INTO handle VALUES (1, '+15551234567')")
-    con.execute("INSERT INTO chat VALUES (1, 'chat-dm', NULL, 45)")
-    con.execute("INSERT INTO chat VALUES (2, 'chat-group', 'The Group', 43)")
+    con.execute("INSERT INTO handle VALUES (2, '+15550000002')")
+    con.execute("INSERT INTO handle VALUES (3, '+15550000003')")
+    con.execute("INSERT INTO chat VALUES (1, 'chat-dm', NULL, 45, 'guid-dm')")
+    con.execute("INSERT INTO chat VALUES (2, 'chat-group', 'The Group', 43, 'guid-group')")
+    for chat_id, handles in ((1, [1]), (2, [1, 2, 3])):
+        for h in handles:
+            con.execute("INSERT INTO chat_handle_join VALUES (?, ?)", (chat_id, h))
     # (rowid, text, body, apple_nanoseconds, is_from_me, chat, assoc_type, item_type, balloon)
     # Real databases use one encoding throughout; mixed encodings would break ORDER BY date.
     NS = 10**9
@@ -117,6 +125,65 @@ class TestChatDb(unittest.TestCase):
         self.assertEqual(decode_attributed_body(make_body("emoji 😂 ok")), "emoji 😂 ok")
         self.assertEqual(decode_attributed_body(b"no string class here"), "")
         self.assertEqual(decode_attributed_body(None), "")
+
+
+class TestRenamedGroupMerging(unittest.TestCase):
+    """A renamed group gets a fresh chat ROWID; keyed on the name its history splits."""
+
+    def setUp(self) -> None:
+        self.db = Path(tempfile.mkdtemp()) / "chat.db"
+        con = sqlite3.connect(self.db)
+        con.executescript(SCHEMA)
+        for i in range(1, 5):
+            con.execute("INSERT INTO handle VALUES (?, ?)", (i, f"+1555000000{i}"))
+        # Same three people, three chat rows: original, renamed, and one that
+        # also gained a member.
+        con.execute("INSERT INTO chat VALUES (1, 'ch1', 'old name', 43, 'g1')")
+        con.execute("INSERT INTO chat VALUES (2, 'ch2', 'new name', 43, 'g2')")
+        con.execute("INSERT INTO chat VALUES (3, 'ch3', 'newest name', 43, 'g3')")
+        for chat_id, handles in ((1, [1, 2, 3]), (2, [1, 2, 3]), (3, [1, 2, 3, 4])):
+            for h in handles:
+                con.execute("INSERT INTO chat_handle_join VALUES (?, ?)", (chat_id, h))
+        NS = 10**9
+        rows = [
+            (1, "old era message", 700_000_000 * NS, 1),
+            (2, "renamed era message", 700_000_100 * NS, 2),
+            (3, "newest era message", 700_000_200 * NS, 3),
+        ]
+        for rowid, text, date, chat in rows:
+            con.execute(
+                "INSERT INTO message (ROWID, text, attributedBody, date, is_from_me,"
+                " service, handle_id, associated_message_type, item_type, balloon_bundle_id)"
+                " VALUES (?,?,NULL,?,1,'iMessage',1,0,0,NULL)",
+                (rowid, text, date),
+            )
+            con.execute("INSERT INTO chat_message_join VALUES (?, ?)", (chat, rowid))
+        con.commit()
+        con.close()
+
+    def test_display_key_splits_history(self) -> None:
+        threads = {r["thread_id"] for r in read_messages(self.db, thread_key="display")}
+        self.assertEqual(threads, {"old name", "new name", "newest name"})
+
+    def test_participant_key_merges_and_uses_newest_name(self) -> None:
+        rows = list(read_messages(self.db, thread_key="participants"))
+        self.assertEqual({r["thread_id"] for r in rows}, {"newest name"})
+        self.assertEqual(len(rows), 3)
+        self.assertIn("+15550000002", rows[0]["participants"])
+
+    def test_threshold_controls_merging(self) -> None:
+        # A perfect-overlap requirement keeps the 4-person roster separate.
+        threads = {
+            r["thread_id"]
+            for r in read_messages(self.db, thread_key="participants", merge_threshold=1.0)
+        }
+        self.assertEqual(len(threads), 2)
+
+    def test_merge_similar_pure(self) -> None:
+        a, b, c = frozenset("xyz"), frozenset("xyz"), frozenset("q")
+        mapping = merge_similar({a: [1], c: [2]}, 0.7)
+        self.assertNotEqual(mapping[1], mapping[2])
+        self.assertEqual(merge_similar({b: [1, 5]}, 0.7)[5], 1)
 
 
 if __name__ == "__main__":
