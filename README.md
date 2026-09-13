@@ -8,8 +8,10 @@ The whole pipeline is proven end to end on synthetic data — `bash scripts/smok
 ## Pipeline
 
 ```
-raw export (csv/xml/json)
-   │  style_ft.parse_export        → data/interim/messages.jsonl
+macOS Messages chat.db          OR   raw export (csv/xml/json)
+   │  style_ft.imessage_db             │  style_ft.parse_export
+   └──────────────┬────────────────────┘
+                  ▼                    → data/interim/messages.jsonl
    │                                 {sender, text, timestamp, thread_id, direction}
    ▼
    │  style_ft.filter_messages     → data/processed/my_messages.jsonl
@@ -44,7 +46,9 @@ bash scripts/setup_gpu.sh
 export PYTHONPATH=src
 export ANTHROPIC_API_KEY=...     # only needed for step 3
 
-# 1. parse the export
+# 1. get the messages — straight from the Mac Messages database (preferred)
+python -m style_ft.imessage_db --output data/interim/messages.jsonl
+#    ...or from a file export
 python -m style_ft.parse_export --input data/raw/export.csv --output data/interim/messages.jsonl
 
 # 2. keep only my messages, drop noise
@@ -77,7 +81,22 @@ Every script takes `--help`.
 
 ## Notes per step
 
-**Parsing.** iMazing CSV, SMS Backup & Restore XML, and JSON/JSONL are auto-detected
+**Reading chat.db.** `style_ft.imessage_db` is the best source on macOS: `is_from_me`
+is authoritative (no guessing from a sender column), timestamps are exact, group vs
+1:1 is known (`--dms-only`), and tapbacks, system events and app payloads are excluded
+by query rather than by string matching. Messages written by recent OS versions leave
+`message.text` NULL and store the body in `attributedBody`; that blob is decoded too,
+so those messages are not silently lost. The database is copied to a temp dir before
+reading, so the live one is never touched. `--since` / `--until` take `YYYY-MM-DD`.
+
+Requires **Full Disk Access** for whatever app runs the command (System Settings →
+Privacy & Security → Full Disk Access), then a full quit and reopen of that app.
+Without it the read fails with `operation not permitted` / `no such table: message`.
+
+Note: `imessage-exporter` 4.2.0 only emits `txt` and `html` — there is no `csv`
+format — which is the other reason this reads the database directly.
+
+**Parsing file exports.** iMazing CSV, SMS Backup & Restore XML, and JSON/JSONL are auto-detected
 by extension. Column names are fuzzy-matched (case and punctuation insensitive);
 override with `--column-map '{"text": ["MyColumn"]}'` if an export is unusual. XML is
 streamed, so a multi-GB backup does not need to fit in memory.
