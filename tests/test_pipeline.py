@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from style_ft import dummy_data, evaluate, providers, split_dataset, style_metrics  # noqa: E402
+from style_ft import dummy_data, evaluate, formatting, providers, split_dataset, style_metrics  # noqa: E402
 from style_ft.filter_messages import filter_messages, is_symbol_only, normalize  # noqa: E402
 from style_ft.formatting import to_messages  # noqa: E402
 from style_ft.generate_pairs import message_id  # noqa: E402
@@ -232,3 +232,54 @@ class TestGenerationHygiene(unittest.TestCase):
     def test_check_rejects_missing_model(self) -> None:
         with self.assertRaises(SystemExit):
             providers.ollama_check("http://127.0.0.1:1", "llama3.2")
+
+
+class FakeTokenizer:
+    """Minimal stand-in for a HF tokenizer: a Llama-3-shaped chat template and
+    whitespace tokenization. Enough to pin the mask boundary without a GPU stack."""
+
+    def __init__(self, prompt_is_prefix: bool = True) -> None:
+        self.prompt_is_prefix = prompt_is_prefix
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+        parts = [f"<|{m['role']}|> {m['content']} <|end|>" for m in messages]
+        if add_generation_prompt:
+            parts.append("<|assistant|>")
+        text = " ".join(parts)
+        # Simulate a template that reorders roles, so the prompt is not a prefix.
+        return text if self.prompt_is_prefix else text[::-1]
+
+    def __call__(self, text, add_special_tokens=False):
+        return {"input_ids": [abs(hash(w)) % 1000 for w in text.split()]}
+
+
+class TestLossMasking(unittest.TestCase):
+    PAIR = {"input": "I am on my way.", "output": "omw rn lol"}
+
+    def test_only_the_assistant_turn_is_supervised(self) -> None:
+        ex = formatting.masked_example(self.PAIR, FakeTokenizer(), 2048)
+        self.assertEqual(len(ex["input_ids"]), len(ex["labels"]))
+        self.assertEqual(len(ex["attention_mask"]), len(ex["labels"]))
+
+        supervised = [t for t in ex["labels"] if t != formatting.IGNORE_INDEX]
+        self.assertTrue(supervised, "nothing is supervised - the mask ate everything")
+        # The supervised span is the tail, and it is the assistant turn only.
+        self.assertEqual(supervised, ex["input_ids"][-len(supervised):])
+        self.assertLess(len(supervised), len(ex["labels"]),
+                        "prompt tokens are not masked")
+
+        tok = FakeTokenizer()
+        n_prompt = len(tok(tok.apply_chat_template(
+            formatting.to_messages(self.PAIR, include_response=False),
+            add_generation_prompt=True))["input_ids"])
+        self.assertEqual(ex["labels"][:n_prompt], [formatting.IGNORE_INDEX] * n_prompt)
+
+    def test_truncation_keeps_arrays_aligned(self) -> None:
+        ex = formatting.masked_example(self.PAIR, FakeTokenizer(), 4)
+        self.assertEqual(len(ex["input_ids"]), 4)
+        self.assertEqual(len(ex["labels"]), 4)
+        self.assertEqual(len(ex["attention_mask"]), 4)
+
+    def test_raises_when_prompt_is_not_a_prefix(self) -> None:
+        with self.assertRaises(formatting.PromptNotAPrefixError):
+            formatting.masked_example(self.PAIR, FakeTokenizer(prompt_is_prefix=False), 2048)

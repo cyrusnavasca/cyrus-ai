@@ -21,7 +21,7 @@ import json
 import sys
 from pathlib import Path
 
-from .formatting import to_messages
+from .formatting import masked_example, to_messages
 from .jsonlio import log, read_jsonl
 
 DEFAULTS = {
@@ -105,22 +105,30 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     def render(rows: list[dict]) -> Dataset:
-        texts = [
-            tokenizer.apply_chat_template(to_messages(p), tokenize=False)
-            for p in rows
-        ]
-        return Dataset.from_dict({"text": texts})
+        # Pre-tokenized with a label mask: loss is computed on the assistant turn
+        # only. Training on the prompt too would spend capacity reproducing the
+        # system prompt and the synthetic input, which the model is never asked
+        # to generate.
+        return Dataset.from_list(
+            [masked_example(p, tokenizer, args.max_seq_length) for p in rows]
+        )
 
     train_ds = render(pairs)
     eval_ds = render(list(read_jsonl(args.eval))) if args.eval else None
-    log(f"example rendered sample:\n{train_ds[0]['text'][:600]}")
+
+    example = train_ds[0]
+    supervised = sum(1 for t in example["labels"] if t != -100)
+    log(f"example rendered sample:\n"
+        f"{tokenizer.apply_chat_template(to_messages(pairs[0]), tokenize=False)[:600]}")
+    log(f"loss is computed on {supervised}/{len(example['labels'])} tokens "
+        f"of the first example (the assistant turn)")
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     sft_config = SFTConfig(
         output_dir=str(out_dir / "checkpoints"),
-        dataset_text_field="text",
+        # The dataset is already tokenized and masked - no text field to render.
         max_seq_length=args.max_seq_length,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
@@ -167,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                 "grad_accum": args.grad_accum,
                 "max_seq_length": args.max_seq_length,
                 "seed": args.seed,
+                "loss_on": "assistant_turn_only",
                 "final_loss": getattr(stats, "training_loss", None),
             },
             indent=2,
