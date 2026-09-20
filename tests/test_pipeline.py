@@ -294,9 +294,21 @@ class TestGenerationHygieneLeaks(unittest.TestCase):
             "send me the contact photo", "and send me the contact photo"))
         self.assertIsNone(providers.clean_generated("omw!", "omw"))
 
-    def test_rejects_shouting(self) -> None:
-        self.assertIsNone(providers.clean_generated(
-            "MAYBE THAT WILL MAKE YOU DREAM MORE", "BECAUSE MAYBE THATLL MAKE U DREAM MORE"))
+    def test_deshouts_rather_than_dropping(self) -> None:
+        # Rejecting these cost the corpus every all-caps example, and the first
+        # fine-tune lost the user's ALL-CAPS register as a result. Keep the pair,
+        # strip the giveaway from the input.
+        self.assertEqual(
+            providers.clean_generated(
+                "MAYBE THAT WILL MAKE YOU DREAM MORE", "BECAUSE MAYBE THATLL MAKE U DREAM MORE"),
+            "Maybe that will make you dream more")
+
+    def test_initialisms_are_not_flattened(self) -> None:
+        # Not shouting, so _unshout never runs and "AP" survives.
+        self.assertEqual(
+            providers.clean_generated(
+                "Do you know the AP Literature homework?", "do u know what is ap lit hw"),
+            "Do you know the AP Literature homework?")
 
     def test_keeps_genuine_rewrites(self) -> None:
         # Short but a real restyle: nothing of the original's surface survives.

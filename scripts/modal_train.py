@@ -79,6 +79,7 @@ def generate(
     input_style: str = "neutral",
     limit: int = 0,
     test_frac: float = 0.2,
+    min_output_chars: int = 20,
 ) -> dict[str, int]:
     """Step 3 on a GPU: one synthetic input per real message, then the split."""
     import json
@@ -95,7 +96,10 @@ def generate(
         for line in pathlib.Path("/vol/sampled.jsonl").read_text().splitlines()
         if line.strip()
     ]
-    records = [r for r in records if r.get("text")]
+    # Very short messages produced most of the first run's content corruption
+    # ("I went to the park after." -> "i went to the d after"): there is barely
+    # any content to anchor on, so the fine-tune invents some.
+    records = [r for r in records if r.get("text") and len(r["text"]) >= min_output_chars]
     if limit:
         records = records[:limit]
     log(f"{len(records)} messages to convert")
@@ -158,7 +162,7 @@ def generate(
 def train(
     run_name: str = "style-v1",
     base_model: str = "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit",
-    epochs: float = 3,
+    epochs: float = 2,
     rank: int = 16,
     max_steps: int = 0,
 ) -> str:
@@ -194,6 +198,14 @@ def train(
     return out_dir
 
 
+@app.function(image=train_image, gpu=GPU, volumes=VOLUMES, timeout=8 * 60 * 60)
+def pipeline(run_name: str = "style-v2", limit: int = 0) -> str:
+    """generate then train in one spawnable call, so a long run needs no local
+    client to stay alive between the two steps."""
+    generate.remote(limit=limit)
+    return train.remote(run_name=run_name)
+
+
 @app.local_entrypoint()
 def main(
     step: str = "train", run_name: str = "style-v1", limit: int = 0, wait: bool = True
@@ -209,9 +221,13 @@ def main(
         raise SystemExit(f"unknown --step {step!r}; use generate, train or all")
 
     if not wait:
-        call = (generate if step == "generate" else train).spawn(
-            **({"limit": limit} if step == "generate" else {"run_name": run_name})
-        )
+        spawns = {
+            "generate": (generate, {"limit": limit}),
+            "train": (train, {"run_name": run_name}),
+            "all": (pipeline, {"run_name": run_name, "limit": limit}),
+        }
+        fn, kwargs = spawns[step]
+        call = fn.spawn(**kwargs)
         print(f"spawned {step}: {call.object_id}")
         print(f"follow it with: modal app logs {app.app_id}")
         return

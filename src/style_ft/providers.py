@@ -227,6 +227,17 @@ def _comparable(text: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", text.lower()).strip()
 
 
+def _unshout(text: str) -> str:
+    """Sentence-case a shouted line.
+
+    Only reached when _is_shouting() is true - a line that is overwhelmingly
+    uppercase - so flattening the whole thing is right. A normal sentence that
+    merely contains an initialism ("AP Literature") never gets here.
+    """
+    out = text.lower().strip()
+    return out[0].upper() + out[1:] if out else out
+
+
 def _is_shouting(text: str) -> bool:
     letters = [c for c in text if c.isalpha()]
     if len(letters) < 8:  # "OK" or an initialism is not shouting
@@ -261,10 +272,13 @@ def clean_generated(text: str, original: str, input_style: str = "neutral") -> s
     ).ratio()
     if similarity > _MAX_SIMILARITY:
         return None
-    # Shouting is one of the style markers the fine-tune is supposed to learn,
-    # so an input that shouts has handed the model the answer.
+    # Shouting is a style marker the fine-tune should learn, so an input that
+    # shouts has handed the model the answer. Rejecting the pair also throws
+    # away the message - and with it every all-caps example in the corpus, which
+    # is how a first attempt at this lost the user's ALL-CAPS register entirely.
+    # Fix the input instead and keep the pair.
     if _is_shouting(out):
-        return None
+        out = _unshout(out)
     # Runaway generation: the input should be the same ballpark as the message.
     if len(out) > max(400, 4 * len(original)):
         return None
