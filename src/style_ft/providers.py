@@ -4,12 +4,19 @@ dummy      - offline, deterministic. Lets the scaffold be tested end to end with
              no API key and no cost. Naive de-slang + sentence-case.
 anthropic  - Claude via the Messages API (sync, threaded) or the Batches API
              (50% cheaper, async, best for thousands of messages).
+ollama     - a local open-weights model over the Ollama HTTP API. Free, and no
+             message text leaves the machine. Small models follow the "reply
+             with the text and nothing else" rule unreliably, so every
+             generation goes through `clean_generated` before it is accepted.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import time
+import urllib.error
+import urllib.request
 from typing import Any, Callable, Iterable
 
 from .jsonlio import log
@@ -19,6 +26,12 @@ DEFAULT_MODEL = "claude-opus-5"
 DEFAULT_MAX_TOKENS = 2048
 # Style rewriting is a simple, high-volume task - low effort keeps cost sane.
 DEFAULT_EFFORT = "low"
+
+# Ollama defaults. llama3.2 (3B) is the largest that runs comfortably on an 8GB
+# Mac; on a GPU box prefer qwen2.5:7b-instruct or llama3.1:8b-instruct, which
+# make far fewer of the mistakes `clean_generated` has to catch.
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_MODEL = "llama3.2"
 
 # --------------------------------------------------------------------------- #
 # dummy provider
@@ -177,3 +190,123 @@ def anthropic_collect_batch(client: Any, batch_id: str, poll_seconds: int = 60) 
             errored += 1
     log(f"batch {batch_id} done: {len(out)} usable, {refused} refused, {errored} errored/canceled/expired")
     return out
+
+
+# --------------------------------------------------------------------------- #
+# generation hygiene (shared, but only really needed by small local models)
+# --------------------------------------------------------------------------- #
+
+# A small model asked for "the text and nothing else" answers with a preamble
+# maybe one time in twenty. Cheap to strip, expensive to leave in: the preamble
+# becomes part of the training input and the fine-tune learns to expect it.
+_PREAMBLE_RE = re.compile(
+    r"^\s*(?:sure[,!.]?\s*)?(?:here(?:'s| is| are)|the following is|neutral version|"
+    r"rewritten|rewrite|plain version|output|input)\b[^\n:]{0,60}:\s*",
+    re.IGNORECASE,
+)
+_SLANG_LEAK = set(_EXPANSIONS) - {"ok", "def"}  # 'ok'/'def' appear in normal prose
+
+
+def clean_generated(text: str, original: str, input_style: str = "neutral") -> str | None:
+    """Normalize a raw generation, or return None if it is not usable as an input.
+
+    Rejections are the point: a bad pair is worse than a missing one, because it
+    teaches the model to map noise onto a real message.
+    """
+    if not text:
+        return None
+    out = text.strip()
+    out = _PREAMBLE_RE.sub("", out).strip()
+    # Whole-output wrapping quotes, which the prompt forbids and small models add.
+    if len(out) >= 2 and out[0] in "\"'“‘" and out[-1] in "\"'”’":
+        out = out[1:-1].strip()
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    if not out:
+        return None
+
+    # A verbatim echo means no style was stripped - the model would learn to copy.
+    if out.lower() == original.strip().lower():
+        return None
+    # Runaway generation: the input should be the same ballpark as the message.
+    if len(out) > max(400, 4 * len(original)):
+        return None
+    if input_style == "bullet" and not out.lstrip().startswith("-"):
+        return None
+    # Style markers the input is explicitly supposed to be free of.
+    if _EMOJI_RE.search(out):
+        return None
+    words = {re.sub(r"[^\w]", "", w).lower() for w in out.split()}
+    if words & _SLANG_LEAK:
+        return None
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# ollama provider
+# --------------------------------------------------------------------------- #
+
+
+def _ollama_post(url: str, path: str, body: dict[str, Any], timeout: int) -> dict[str, Any]:
+    req = urllib.request.Request(
+        url.rstrip("/") + path,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def ollama_check(url: str = DEFAULT_OLLAMA_URL, model: str = DEFAULT_OLLAMA_MODEL) -> None:
+    """Fail loudly at startup rather than 5000 times in a row."""
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/api/tags", timeout=10) as resp:
+            tags = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError) as exc:
+        raise SystemExit(
+            f"Cannot reach Ollama at {url} ({exc}). Start it with `ollama serve`."
+        ) from exc
+    names = {m.get("name", "") for m in tags.get("models", [])}
+    if model not in names and f"{model}:latest" not in names:
+        raise SystemExit(
+            f"Model {model!r} is not pulled. Available: {sorted(names) or 'none'}. "
+            f"Run `ollama pull {model}`."
+        )
+
+
+def ollama_generate_one(
+    message: str,
+    input_style: str,
+    model: str = DEFAULT_OLLAMA_MODEL,
+    url: str = DEFAULT_OLLAMA_URL,
+    max_tokens: int = 512,
+    timeout: int = 300,
+    max_retries: int = 3,
+) -> str | None:
+    """Returns a cleaned generated input, or None if unusable after retries."""
+    body = {
+        "model": model,
+        "stream": False,
+        # Low temperature: this is a transcription-like task, not a creative one.
+        "options": {"temperature": 0.2, "num_predict": max_tokens},
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": build_user_prompt(message, input_style)},
+        ],
+    }
+    for attempt in range(max_retries):
+        try:
+            resp = _ollama_post(url, "/api/chat", body, timeout)
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            if attempt == max_retries - 1:
+                return None
+            time.sleep(min(2**attempt, 15))
+            continue
+        cleaned = clean_generated(
+            resp.get("message", {}).get("content", ""), message, input_style
+        )
+        if cleaned:
+            return cleaned
+        # A rejected generation is usually a one-off formatting slip; one resample
+        # at a slightly higher temperature recovers most of them.
+        body["options"]["temperature"] = 0.6
+    return None

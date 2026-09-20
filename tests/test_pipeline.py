@@ -195,3 +195,40 @@ class TestJsonl(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestGenerationHygiene(unittest.TestCase):
+    """clean_generated is the only thing standing between a small local model
+    and a training set full of preambles."""
+
+    def test_strips_preamble_and_quotes(self) -> None:
+        self.assertEqual(
+            providers.clean_generated("Here is the neutral version: I am on my way.", "omw rn"),
+            "I am on my way.",
+        )
+        self.assertEqual(
+            providers.clean_generated('"I will be there soon."', "omw"),
+            "I will be there soon.",
+        )
+
+    def test_rejects_unusable(self) -> None:
+        # verbatim echo: no style was stripped
+        self.assertIsNone(providers.clean_generated("omw rn", "omw rn"))
+        # leaked slang the input is supposed to be free of
+        self.assertIsNone(providers.clean_generated("lmk when you are here", "lmk when ur here"))
+        # leaked emoji
+        self.assertIsNone(providers.clean_generated("I am laughing 😂", "lol 😂"))
+        # runaway generation
+        self.assertIsNone(providers.clean_generated("x" * 500, "hi"))
+        self.assertIsNone(providers.clean_generated("", "hi"))
+
+    def test_bullet_style_must_be_bullets(self) -> None:
+        self.assertIsNone(providers.clean_generated("Not a bullet list.", "hi", "bullet"))
+        self.assertEqual(
+            providers.clean_generated("- Running late\n- Start without me", "late, start w/o me", "bullet"),
+            "- Running late\n- Start without me",
+        )
+
+    def test_check_rejects_missing_model(self) -> None:
+        with self.assertRaises(SystemExit):
+            providers.ollama_check("http://127.0.0.1:1", "llama3.2")

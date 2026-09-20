@@ -11,7 +11,11 @@ Usage:
   python -m style_ft.generate_pairs --input data/dummy/my_messages.jsonl \
       --output data/dummy/pairs.jsonl --provider dummy
 
-  # real run, cheapest path for thousands of messages
+  # local open-weights model - free, and no message text leaves the machine
+  python -m style_ft.generate_pairs --input data/processed/sampled.jsonl \
+      --output data/processed/pairs.jsonl --provider ollama --ollama-model llama3.2
+
+  # real run, cheapest hosted path for thousands of messages
   python -m style_ft.generate_pairs --input data/processed/my_messages.jsonl \
       --output data/processed/pairs.jsonl --provider anthropic --batch
 """
@@ -58,12 +62,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--input", default="data/processed/my_messages.jsonl")
     ap.add_argument("--output", default="data/processed/pairs.jsonl")
-    ap.add_argument("--provider", default="dummy", choices=["dummy", "anthropic"])
+    ap.add_argument("--provider", default="dummy", choices=["dummy", "anthropic", "ollama"])
     ap.add_argument("--input-style", default="neutral", choices=input_styles())
     ap.add_argument("--model", default=providers.DEFAULT_MODEL)
     ap.add_argument("--max-tokens", type=int, default=providers.DEFAULT_MAX_TOKENS)
     ap.add_argument("--limit", type=int, default=None, help="only process the first N new messages")
     ap.add_argument("--concurrency", type=int, default=8, help="sync path only")
+    ap.add_argument("--ollama-model", default=providers.DEFAULT_OLLAMA_MODEL)
+    ap.add_argument("--ollama-url", default=providers.DEFAULT_OLLAMA_URL)
     ap.add_argument("--batch", action="store_true", help="use the Batches API (50%% cheaper, async)")
     ap.add_argument("--poll-seconds", type=int, default=60)
     ap.add_argument("--collect-batch-id", default=None, help="skip submission, collect an existing batch")
@@ -89,8 +95,12 @@ def main(argv: list[str] | None = None) -> int:
     # Append as results arrive so a crash never loses completed work.
     with out_path.open("a", encoding="utf-8") as fh:
 
+        rejected = 0
+
         def emit(rec: dict[str, Any], generated: str | None) -> None:
+            nonlocal rejected
             if not generated:
+                rejected += 1
                 return
             fh.write(json.dumps(_pair(rec, generated, args.input_style), ensure_ascii=False) + "\n")
             fh.flush()
@@ -98,6 +108,23 @@ def main(argv: list[str] | None = None) -> int:
         if args.provider == "dummy":
             for rec in todo:
                 emit(rec, providers.dummy_neutralize(rec["text"], args.input_style))
+
+        elif args.provider == "ollama":
+            providers.ollama_check(args.ollama_url, args.ollama_model)
+
+            def local(rec: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+                return rec, providers.ollama_generate_one(
+                    rec["text"], args.input_style, args.ollama_model, args.ollama_url
+                )
+
+            # Ollama serializes requests onto one model instance anyway; a small
+            # pool only helps hide per-request overhead, and a big one thrashes
+            # memory on a laptop.
+            with ThreadPoolExecutor(max_workers=max(1, min(args.concurrency, 4))) as pool:
+                for i, (rec, generated) in enumerate(pool.map(local, todo), 1):
+                    emit(rec, generated)
+                    if i % 25 == 0:
+                        log(f"{i}/{len(todo)} ({rejected} rejected)")
 
         elif args.batch or args.collect_batch_id:
             anthropic = providers._require_anthropic()
@@ -139,6 +166,9 @@ def main(argv: list[str] | None = None) -> int:
                         log(f"{i}/{len(todo)}")
 
     total = sum(1 for _ in read_jsonl(out_path))
+    if rejected:
+        log(f"{rejected} generations rejected as unusable "
+            f"({rejected / max(1, len(todo)):.1%} of attempts)")
     log(f"{total} pairs in {out_path}")
     return 0
 
