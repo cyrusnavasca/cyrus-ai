@@ -195,14 +195,29 @@ def train(
 
 
 @app.local_entrypoint()
-def main(step: str = "train", run_name: str = "style-v1", limit: int = 0) -> None:
-    if step == "generate":
-        print(generate.remote(limit=limit))
-    elif step == "train":
-        print(f"done -> {train.remote(run_name=run_name)}")
-    elif step == "all":
-        print(generate.remote(limit=limit))
-        print(f"done -> {train.remote(run_name=run_name)}")
-    else:
+def main(
+    step: str = "train", run_name: str = "style-v1", limit: int = 0, wait: bool = True
+) -> None:
+    """--no-wait spawns the job and returns immediately.
+
+    `.remote()` blocks the local client for the whole run, and Modal cancels the
+    remote function the moment that client dies - which loses a half-finished
+    fine-tune to any local hiccup. `modal run --detach` keeps the app alive but
+    not the blocking call, so long runs want --no-wait instead.
+    """
+    if step not in {"generate", "train", "all"}:
         raise SystemExit(f"unknown --step {step!r}; use generate, train or all")
-    print(f"pull results with: modal volume get style-ft /outputs ./outputs")
+
+    if not wait:
+        call = (generate if step == "generate" else train).spawn(
+            **({"limit": limit} if step == "generate" else {"run_name": run_name})
+        )
+        print(f"spawned {step}: {call.object_id}")
+        print(f"follow it with: modal app logs {app.app_id}")
+        return
+
+    if step in {"generate", "all"}:
+        print(generate.remote(limit=limit))
+    if step in {"train", "all"}:
+        print(f"done -> {train.remote(run_name=run_name)}")
+    print("pull results with: modal volume get style-ft /outputs ./outputs")
