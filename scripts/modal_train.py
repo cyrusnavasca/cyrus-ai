@@ -48,19 +48,23 @@ hf_cache = modal.Volume.from_name("style-ft-hf-cache", create_if_missing=True)
 
 VOLUMES = {"/vol": vol, "/root/.cache/huggingface": hf_cache}
 
-_src = modal.Image.debian_slim(python_version="3.11").add_local_dir(
-    REPO / "src" / "style_ft", "/root/style_ft"
-)
-
+# Same reasoning as the vLLM image below: Unsloth and bitsandbytes compile
+# kernels at import time, so the toolkit has to be present.
 train_image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry("nvidia/cuda:12.9.0-devel-ubuntu22.04", add_python="3.12")
+    .entrypoint([])
     .pip_install("unsloth", "unsloth_zoo", "trl", "peft", "datasets", "bitsandbytes", "accelerate")
     .add_local_dir(REPO / "src" / "style_ft", "/root/style_ft")
 )
 
+# vLLM needs the CUDA toolkit on the image, not just a GPU: its flashinfer
+# backend JIT-compiles kernels at startup and fails with "Could not find nvcc"
+# on a slim base. Hence the -devel CUDA image rather than debian_slim.
 generate_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .pip_install("vllm", "transformers")
+    modal.Image.from_registry("nvidia/cuda:12.9.0-devel-ubuntu22.04", add_python="3.12")
+    .entrypoint([])
+    .uv_pip_install("vllm==0.21.0")
+    .env({"HF_XET_HIGH_PERFORMANCE": "1"})
     .add_local_dir(REPO / "src" / "style_ft", "/root/style_ft")
 )
 

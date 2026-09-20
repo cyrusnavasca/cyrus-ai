@@ -12,6 +12,7 @@ ollama     - a local open-weights model over the Ollama HTTP API. Free, and no
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 import time
@@ -206,6 +207,32 @@ _PREAMBLE_RE = re.compile(
 )
 _SLANG_LEAK = set(_EXPANSIONS) - {"ok", "def"}  # 'ok'/'def' appear in normal prose
 
+# Above this the "neutral" input is really just the message again, so the pair
+# teaches an identity mapping instead of a style. Measured against a real 7B
+# run: degenerate pairs scored 0.92+, while genuine restyles ("ur ... gosh 😩"
+# <- "You are ...") topped out at 0.88.
+#
+# Deliberately compared on near-raw text. Normalizing case and punctuation away
+# first looks tidier but destroys the very markers that distinguish a good pair
+# from a copy, and rejects a third of a healthy dataset.
+_MAX_SIMILARITY = 0.90
+
+
+def _collapsed(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _comparable(text: str) -> str:
+    """Lowercased, depunctuated form - for asking 'is this the same sentence?'"""
+    return re.sub(r"[^a-z0-9 ]", "", text.lower()).strip()
+
+
+def _is_shouting(text: str) -> bool:
+    letters = [c for c in text if c.isalpha()]
+    if len(letters) < 8:  # "OK" or an initialism is not shouting
+        return False
+    return sum(c.isupper() for c in letters) / len(letters) > 0.7
+
 
 def clean_generated(text: str, original: str, input_style: str = "neutral") -> str | None:
     """Normalize a raw generation, or return None if it is not usable as an input.
@@ -224,8 +251,19 @@ def clean_generated(text: str, original: str, input_style: str = "neutral") -> s
     if not out:
         return None
 
-    # A verbatim echo means no style was stripped - the model would learn to copy.
-    if out.lower() == original.strip().lower():
+    # An echo means no style was stripped - the model would learn to copy rather
+    # than restyle. Compared on a depunctuated form, because "omw!" -> "omw" is
+    # just as useless a pair as an exact repeat.
+    if not _comparable(out) or _comparable(out) == _comparable(original):
+        return None
+    similarity = difflib.SequenceMatcher(
+        None, _collapsed(out), _collapsed(original)
+    ).ratio()
+    if similarity > _MAX_SIMILARITY:
+        return None
+    # Shouting is one of the style markers the fine-tune is supposed to learn,
+    # so an input that shouts has handed the model the answer.
+    if _is_shouting(out):
         return None
     # Runaway generation: the input should be the same ballpark as the message.
     if len(out) > max(400, 4 * len(original)):

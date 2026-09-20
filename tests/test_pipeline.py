@@ -283,3 +283,29 @@ class TestLossMasking(unittest.TestCase):
     def test_raises_when_prompt_is_not_a_prefix(self) -> None:
         with self.assertRaises(formatting.PromptNotAPrefixError):
             formatting.masked_example(self.PAIR, FakeTokenizer(prompt_is_prefix=False), 2048)
+
+
+class TestGenerationHygieneLeaks(unittest.TestCase):
+    """Cases seen in a real 7B run: the input was technically different from the
+    message but still gave away the style the fine-tune is meant to learn."""
+
+    def test_rejects_near_verbatim(self) -> None:
+        self.assertIsNone(providers.clean_generated(
+            "send me the contact photo", "and send me the contact photo"))
+        self.assertIsNone(providers.clean_generated("omw!", "omw"))
+
+    def test_rejects_shouting(self) -> None:
+        self.assertIsNone(providers.clean_generated(
+            "MAYBE THAT WILL MAKE YOU DREAM MORE", "BECAUSE MAYBE THATLL MAKE U DREAM MORE"))
+
+    def test_keeps_genuine_rewrites(self) -> None:
+        # Short but a real restyle: nothing of the original's surface survives.
+        self.assertEqual(
+            providers.clean_generated("I am on my way.", "omw"), "I am on my way.")
+        self.assertEqual(
+            providers.clean_generated(
+                "The building had three floors and many rooms.",
+                "dude yes it had like three floors and hella rooms"),
+            "The building had three floors and many rooms.")
+        # Short all-caps is an initialism, not shouting.
+        self.assertEqual(providers.clean_generated("BART is fine.", "bart good"), "BART is fine.")
