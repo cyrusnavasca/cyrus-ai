@@ -73,9 +73,16 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     # Imported here so --help works on a machine without a GPU stack.
+    #
+    # Unsloth MUST be imported before trl. It patches TRL's classes on import;
+    # importing trl first binds this module to the unpatched SFTConfig while
+    # SFTTrainer validates against the patched one, which surfaces as
+    # "eos_token ('<EOS_TOKEN>') is not found in the vocabulary" and
+    # "unexpected keyword argument 'max_seq_length'". Keep unsloth first and do
+    # not let an import sorter reorder these.
+    from unsloth import FastLanguageModel, is_bfloat16_supported  # isort: skip
     from datasets import Dataset
     from trl import SFTConfig, SFTTrainer
-    from unsloth import FastLanguageModel, is_bfloat16_supported
 
     pairs = list(read_jsonl(args.train))
     if not pairs:
@@ -126,10 +133,22 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # TRL renamed SFTConfig.max_seq_length to max_length and SFTTrainer's
+    # `tokenizer` to `processing_class`. Both spellings are still in the wild
+    # depending on which TRL a GPU box resolves, so ask rather than pin.
+    import dataclasses
+
+    sft_fields = {f.name for f in dataclasses.fields(SFTConfig)}
+    length_kw = "max_length" if "max_length" in sft_fields else "max_seq_length"
+
     sft_config = SFTConfig(
         output_dir=str(out_dir / "checkpoints"),
         # The dataset is already tokenized and masked - no text field to render.
-        max_seq_length=args.max_seq_length,
+        **({length_kw: args.max_seq_length} if length_kw in sft_fields else {}),
+        # Some TRL builds default this to the literal string "<EOS_TOKEN>" and
+        # then reject it for not being in the vocabulary. Hand over the token
+        # the tokenizer actually uses.
+        **({"eos_token": tokenizer.eos_token} if "eos_token" in sft_fields else {}),
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
         warmup_ratio=DEFAULTS["warmup_ratio"],
@@ -147,13 +166,15 @@ def main(argv: list[str] | None = None) -> int:
         **({"eval_strategy": "epoch"} if eval_ds is not None else {}),
     )
 
-    trainer = SFTTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataset=train_ds,
-        eval_dataset=eval_ds,
-        args=sft_config,
+    # Same wrapping problem here, and SFTTrainer is not a dataclass - so try the
+    # current spelling and fall back rather than probing.
+    trainer_kwargs = dict(
+        model=model, train_dataset=train_ds, eval_dataset=eval_ds, args=sft_config
     )
+    try:
+        trainer = SFTTrainer(processing_class=tokenizer, **trainer_kwargs)
+    except TypeError:
+        trainer = SFTTrainer(tokenizer=tokenizer, **trainer_kwargs)
     stats = trainer.train()
 
     adapter_dir = out_dir / "adapter"
