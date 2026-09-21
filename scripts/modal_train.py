@@ -205,6 +205,72 @@ def train(
     return out_dir
 
 
+@app.function(image=train_image, gpu="L4", volumes=VOLUMES, timeout=1800)
+def ask(
+    prompts: list[str],
+    run_name: str = "style-v2",
+    my_name: str = "Me",
+    with_whom: str = "a friend",
+    chat: bool = False,
+) -> list[tuple[str, str, str]]:
+    """Run arbitrary prompts through a trained adapter, base and tuned.
+
+    The held-out report only shows whatever happened to be first in the test
+    file. This answers "what does it do if I type X".
+
+    L4 rather than A100: inference on an 8B 4-bit model does not need the
+    bigger card, and this runs while a training job holds the A100.
+    """
+    import sys
+
+    sys.path.insert(0, "/root")
+    import torch
+    from unsloth import FastLanguageModel  # isort: skip
+    from style_ft.formatting import messages_for
+
+    adapter = f"/vol/outputs/{run_name}/adapter"
+    # A chat pair is context -> reply; a style pair is one line -> restyled.
+    pairs = [
+        {"context": [{"speaker": with_whom, "text": p}], "output": "",
+         "meta": {"with": with_whom, "is_group": False}}
+        if chat else {"input": p, "output": ""}
+        for p in prompts
+    ]
+
+    def run(model_name: str, is_adapter: bool) -> list[str]:
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=model_name, max_seq_length=2048, dtype=None, load_in_4bit=True
+        )
+        FastLanguageModel.for_inference(model)
+        outs = []
+        for pair in pairs:
+            text = tokenizer.apply_chat_template(
+                messages_for(pair, include_response=False, my_name=my_name),
+                tokenize=False, add_generation_prompt=True,
+            )
+            inputs = tokenizer(text, return_tensors="pt").to(model.device)
+            with torch.no_grad():
+                gen = model.generate(**inputs, max_new_tokens=96, do_sample=True,
+                                     temperature=0.8, top_p=0.95,
+                                     pad_token_id=tokenizer.eos_token_id)
+            outs.append(
+                tokenizer.decode(gen[0][inputs["input_ids"].shape[1]:],
+                                 skip_special_tokens=True).strip()
+            )
+        del model
+        torch.cuda.empty_cache()
+        return outs
+
+    import json as _json
+
+    cfg = _json.loads(
+        pathlib.Path(f"/vol/outputs/{run_name}/training_config.json").read_text()
+    )
+    base_outs = run(cfg["base_model"], False)
+    tuned_outs = run(adapter, True)
+    return list(zip(prompts, base_outs, tuned_outs))
+
+
 # No GPU: this only blocks on two calls that each request their own. Giving it
 # one would idle a second A100 for the entire run.
 @app.function(image=modal.Image.debian_slim(python_version="3.12"), timeout=8 * 60 * 60)
@@ -238,6 +304,7 @@ def main(
     limit: int = 0,
     wait: bool = True,
     my_name: str = "Me",
+    prompt: str = "",
 ) -> None:
     """--no-wait spawns the job and returns immediately.
 
@@ -246,8 +313,20 @@ def main(
     fine-tune to any local hiccup. `modal run --detach` keeps the app alive but
     not the blocking call, so long runs want --no-wait instead.
     """
+    if step == "ask":
+        if not prompt:
+            raise SystemExit("--step ask needs --prompt")
+        # Semicolons so several probes share one container load.
+        prompts = [p.strip() for p in prompt.split(";") if p.strip()]
+        is_chat = run_name.startswith("chat")
+        for text, base, tuned in ask.remote(
+            prompts, run_name=run_name, my_name=my_name, chat=is_chat
+        ):
+            print(f"\nPROMPT: {text}\n  BASE : {base}\n  TUNED: {tuned}")
+        return
+
     if step not in {"generate", "train", "chat", "all"}:
-        raise SystemExit(f"unknown --step {step!r}; use generate, train, chat or all")
+        raise SystemExit(f"unknown --step {step!r}; use generate, train, chat, ask or all")
 
     if not wait:
         # 35k conversational pairs, so one epoch and a wider effective batch:

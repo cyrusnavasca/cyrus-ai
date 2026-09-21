@@ -67,8 +67,15 @@ def cmd_generate(args) -> int:
     from unsloth import FastLanguageModel
 
     pairs = list(read_jsonl(args.test))
-    if args.limit:
-        pairs = pairs[: args.limit]
+    if args.limit and len(pairs) > args.limit:
+        # A deterministic spread, not the head. The test file is grouped by
+        # thread, so pairs[:25] is one conversation with one person - which is
+        # how an earlier report came to describe a single contact as the model's
+        # overall behaviour.
+        import random  # noqa: PLC0415
+
+        pairs = random.Random(args.sample_seed).sample(pairs, args.limit)
+        pairs.sort(key=lambda p: p.get("id", ""))
     if not pairs:
         raise SystemExit(f"No test pairs in {args.test}")
     log(f"{len(pairs)} test pairs")
@@ -209,7 +216,9 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--adapter", default="outputs/style-lora/adapter")
     g.add_argument("--base-model", default=None, help="defaults to the value in training_config.json")
     g.add_argument("--out", default="outputs/style-lora/predictions.jsonl")
-    g.add_argument("--limit", type=int, default=25)
+    g.add_argument("--limit", type=int, default=25,
+                   help="how many held-out pairs to generate for (random sample)")
+    g.add_argument("--sample-seed", type=int, default=0)
     g.add_argument("--max-seq-length", type=int, default=2048)
     g.add_argument("--max-new-tokens", type=int, default=GEN_DEFAULTS["max_new_tokens"])
     g.add_argument("--temperature", type=float, default=GEN_DEFAULTS["temperature"])
