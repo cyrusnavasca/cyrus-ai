@@ -165,6 +165,10 @@ def train(
     epochs: float = 2,
     rank: int = 16,
     max_steps: int = 0,
+    train_file: str = "/vol/train.jsonl",
+    test_file: str = "/vol/test.jsonl",
+    my_name: str = "Me",
+    grad_accum: int = 4,
 ) -> str:
     """Steps 4 and 5: LoRA fine-tune, then generate on the held-out test set."""
     import sys
@@ -174,12 +178,14 @@ def train(
 
     out_dir = f"/vol/outputs/{run_name}"
     argv = [
-        "--train", "/vol/train.jsonl",
-        "--eval", "/vol/test.jsonl",
+        "--train", train_file,
+        "--eval", test_file,
         "--output-dir", out_dir,
         "--base-model", base_model,
         "--epochs", str(epochs),
         "--rank", str(rank),
+        "--my-name", my_name,
+        "--grad-accum", str(grad_accum),
     ]
     if max_steps:
         argv += ["--max-steps", str(max_steps)]
@@ -190,7 +196,7 @@ def train(
     # off predictions.jsonl, which needs nothing.
     evaluate.main([
         "generate",
-        "--test", "/vol/test.jsonl",
+        "--test", test_file,
         "--adapter", f"{out_dir}/adapter",
         "--out", f"{out_dir}/predictions.jsonl",
     ])
@@ -208,7 +214,11 @@ def pipeline(run_name: str = "style-v2", limit: int = 0) -> str:
 
 @app.local_entrypoint()
 def main(
-    step: str = "train", run_name: str = "style-v1", limit: int = 0, wait: bool = True
+    step: str = "train",
+    run_name: str = "style-v1",
+    limit: int = 0,
+    wait: bool = True,
+    my_name: str = "Me",
 ) -> None:
     """--no-wait spawns the job and returns immediately.
 
@@ -217,13 +227,25 @@ def main(
     fine-tune to any local hiccup. `modal run --detach` keeps the app alive but
     not the blocking call, so long runs want --no-wait instead.
     """
-    if step not in {"generate", "train", "all"}:
-        raise SystemExit(f"unknown --step {step!r}; use generate, train or all")
+    if step not in {"generate", "train", "chat", "all"}:
+        raise SystemExit(f"unknown --step {step!r}; use generate, train, chat or all")
 
     if not wait:
+        # 35k conversational pairs, so one epoch and a wider effective batch:
+        # at the style path's settings this would be ~5 GPU-hours.
+        chat = {
+            "train_file": "/vol/chat_train.jsonl",
+            "test_file": "/vol/chat_test.jsonl",
+            "my_name": my_name,
+            "epochs": 1,
+            "grad_accum": 8,
+        }
         spawns = {
             "generate": (generate, {"limit": limit}),
             "train": (train, {"run_name": run_name}),
+            # Conversational pairs are built locally by build_chat_pairs and
+            # pushed to the volume, so this step never touches the generator.
+            "chat": (train, {"run_name": run_name, **chat}),
             "all": (pipeline, {"run_name": run_name, "limit": limit}),
         }
         fn, kwargs = spawns[step]
@@ -234,6 +256,8 @@ def main(
 
     if step in {"generate", "all"}:
         print(generate.remote(limit=limit))
+    if step == "chat":
+        print(f"done -> {train.remote(run_name=run_name, train_file='/vol/chat_train.jsonl', test_file='/vol/chat_test.jsonl', my_name=my_name)}")
     if step in {"train", "all"}:
         print(f"done -> {train.remote(run_name=run_name)}")
     print("pull results with: modal volume get style-ft /outputs ./outputs")
