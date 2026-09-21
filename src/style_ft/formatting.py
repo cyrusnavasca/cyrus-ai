@@ -13,6 +13,21 @@ from .prompts import TRAINING_INSTRUCTION
 
 SYSTEM = "You write text messages in the user's personal style."
 
+# Conversational (build_chat_pairs) format. Unlike the style-transfer prompt
+# above, this one carries persona: the model is told who it is and who it is
+# talking to, because "what would I say next" depends on both. The name and the
+# contact are filled per example, so the same adapter can text different people
+# differently.
+CHAT_SYSTEM = (
+    "You are {me}. You are texting {who}. Reply exactly as {me} would - same "
+    "voice, same length, same punctuation habits. Write only the message."
+)
+CHAT_GROUP_SYSTEM = (
+    "You are {me}. You are texting in the group chat \"{who}\". Reply exactly "
+    "as {me} would - same voice, same length, same punctuation habits. Write "
+    "only the message."
+)
+
 
 def user_turn(generated_input: str) -> str:
     return f"{TRAINING_INSTRUCTION}\n\n{generated_input.strip()}"
@@ -26,6 +41,39 @@ def to_messages(pair: dict[str, Any], include_response: bool = True) -> list[dic
     if include_response:
         msgs.append({"role": "assistant", "content": pair["output"]})
     return msgs
+
+
+def chat_system(pair: dict[str, Any], my_name: str = "Me") -> str:
+    meta = pair.get("meta", {})
+    template = CHAT_GROUP_SYSTEM if meta.get("is_group") else CHAT_SYSTEM
+    return template.format(me=my_name, who=meta.get("with", "someone"))
+
+
+def chat_transcript(context: list[dict[str, str]]) -> str:
+    return "\n".join(f"{turn['speaker']}: {turn['text']}" for turn in context)
+
+
+def chat_to_messages(
+    pair: dict[str, Any], include_response: bool = True, my_name: str = "Me"
+) -> list[dict[str, str]]:
+    """Conversational format: transcript in, my next message out."""
+    msgs = [
+        {"role": "system", "content": chat_system(pair, my_name)},
+        {"role": "user", "content": chat_transcript(pair["context"])},
+    ]
+    if include_response:
+        msgs.append({"role": "assistant", "content": pair["output"]})
+    return msgs
+
+
+def messages_for(pair: dict[str, Any], include_response: bool = True, my_name: str = "Me"):
+    """Dispatch on pair shape so training and eval handle both formats.
+
+    A chat pair has `context`; a style-transfer pair has `input`.
+    """
+    if "context" in pair:
+        return chat_to_messages(pair, include_response, my_name)
+    return to_messages(pair, include_response)
 
 
 # Sentinel HuggingFace uses for "do not compute loss on this token".
@@ -42,7 +90,7 @@ class PromptNotAPrefixError(RuntimeError):
 
 
 def masked_example(
-    pair: dict[str, Any], tokenizer: Any, max_seq_length: int
+    pair: dict[str, Any], tokenizer: Any, max_seq_length: int, my_name: str = "Me"
 ) -> dict[str, list[int]]:
     """Tokenize one pair, masking the prompt so loss falls on the reply alone.
 
@@ -54,11 +102,13 @@ def masked_example(
     hardcoded role markers, so it stays correct across base models.
     """
     prompt = tokenizer.apply_chat_template(
-        to_messages(pair, include_response=False),
+        messages_for(pair, include_response=False, my_name=my_name),
         tokenize=False,
         add_generation_prompt=True,
     )
-    full = tokenizer.apply_chat_template(to_messages(pair), tokenize=False)
+    full = tokenizer.apply_chat_template(
+        messages_for(pair, my_name=my_name), tokenize=False
+    )
 
     prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
     full_ids = tokenizer(full, add_special_tokens=False)["input_ids"]

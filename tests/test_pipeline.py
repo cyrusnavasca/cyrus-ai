@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from style_ft import dummy_data, evaluate, formatting, providers, split_dataset, style_metrics  # noqa: E402
+from style_ft import build_chat_pairs, dummy_data, evaluate, formatting, providers, split_dataset, style_metrics  # noqa: E402
 from style_ft.filter_messages import filter_messages, is_symbol_only, normalize  # noqa: E402
 from style_ft.formatting import to_messages  # noqa: E402
 from style_ft.generate_pairs import message_id  # noqa: E402
@@ -321,3 +321,63 @@ class TestGenerationHygieneLeaks(unittest.TestCase):
             "The building had three floors and many rooms.")
         # Short all-caps is an initialism, not shouting.
         self.assertEqual(providers.clean_generated("BART is fine.", "bart good"), "BART is fine.")
+
+
+class TestChatPairs(unittest.TestCase):
+    """Conversational (context -> reply) pairs, built from real threads."""
+
+    THREAD = [
+        {"text": "yo", "direction": "in", "sender": "+14155550001", "thread_id": "+14155550001",
+         "timestamp": "2026-01-01T10:00:00+00:00", "is_group": False},
+        {"text": "u up", "direction": "in", "sender": "+14155550001", "thread_id": "+14155550001",
+         "timestamp": "2026-01-01T10:00:30+00:00", "is_group": False},
+        {"text": "ya", "direction": "out", "sender": "Me", "thread_id": "+14155550001",
+         "timestamp": "2026-01-01T10:01:00+00:00", "is_group": False},
+        {"text": "barely", "direction": "out", "sender": "Me", "thread_id": "+14155550001",
+         "timestamp": "2026-01-01T10:01:20+00:00", "is_group": False},
+        # Next day: a new conversation, not a reply to the above.
+        {"text": "morning", "direction": "out", "sender": "Me", "thread_id": "+14155550001",
+         "timestamp": "2026-01-02T09:00:00+00:00", "is_group": False},
+    ]
+
+    def test_bursts_become_one_turn(self) -> None:
+        turns = build_chat_pairs.to_turns(self.THREAD)
+        self.assertEqual(turns[0]["text"], "yo\nu up")
+        self.assertEqual(turns[1]["text"], "ya\nbarely")
+
+    def test_pairs_carry_context_and_persona(self) -> None:
+        pairs, _ = build_chat_pairs.build_pairs(self.THREAD, my_name="Cyrus")
+        self.assertEqual(len(pairs), 1)
+        pair = pairs[0]
+        self.assertEqual(pair["output"], "ya\nbarely")
+        self.assertEqual([t["speaker"] for t in pair["context"]], ["Friend 1"])
+        # The raw handle never reaches the training text.
+        self.assertNotIn("+1415", json.dumps(pair["context"]))
+        self.assertEqual(pair["meta"]["with"], "Friend 1")
+
+    def test_session_gap_drops_orphan_openings(self) -> None:
+        # "morning" the next day has no usable context, so it is not a pair.
+        pairs, stats = build_chat_pairs.build_pairs(self.THREAD, my_name="Cyrus")
+        self.assertEqual(stats["no_context"], 1)
+        self.assertTrue(all(p["output"] != "morning" for p in pairs))
+
+    def test_contacts_override_aliases(self) -> None:
+        pairs, _ = build_chat_pairs.build_pairs(
+            self.THREAD, my_name="Cyrus", contacts={"+14155550001": "Mom"})
+        self.assertEqual(pairs[0]["meta"]["with"], "Mom")
+        self.assertEqual(pairs[0]["context"][0]["speaker"], "Mom")
+
+    def test_chat_messages_shape(self) -> None:
+        pairs, _ = build_chat_pairs.build_pairs(self.THREAD, my_name="Cyrus")
+        msgs = formatting.messages_for(pairs[0], my_name="Cyrus")
+        self.assertEqual([m["role"] for m in msgs], ["system", "user", "assistant"])
+        self.assertIn("You are Cyrus", msgs[0]["content"])
+        self.assertIn("texting Friend 1", msgs[0]["content"])
+        self.assertEqual(msgs[2]["content"], "ya\nbarely")
+
+    def test_masking_works_on_chat_pairs(self) -> None:
+        pairs, _ = build_chat_pairs.build_pairs(self.THREAD, my_name="Cyrus")
+        ex = formatting.masked_example(pairs[0], FakeTokenizer(), 2048, "Cyrus")
+        supervised = [t for t in ex["labels"] if t != formatting.IGNORE_INDEX]
+        self.assertTrue(supervised)
+        self.assertLess(len(supervised), len(ex["labels"]))

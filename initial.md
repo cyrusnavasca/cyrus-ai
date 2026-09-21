@@ -69,13 +69,27 @@ machine has MPS, not CUDA, and Unsloth has no Apple Silicon build.
 2. Run `style_ft.generate_pairs --provider anthropic --batch`, then `style_ft.split_dataset`
 3. Kick off `style_ft.train_lora` on the GPU box
 4. Run `style_ft.evaluate generate` + `report`, judge against these success criteria:
-   - [ ] _(fill in 3-5 concrete things that should show up — phrases, tone, quirks)_
+   Drafted from a frequency scan of the 5,000 sampled messages (percentages are how
+   often each shows up in your real outgoing texts). Confirm or edit these — they are
+   measured from the corpus, not from knowing you.
 
-   Left blank on purpose — this needs your own read of the real messages. The metrics in
-   `eval_metrics.json` cover the mechanical markers (lowercasing, abbreviations, emoji,
-   dropped terminal punctuation, message length); the criteria here should name the things
-   a metric cannot catch, e.g. "hedges with 'honestly' / 'genuinely'", "opens with the
-   conclusion then explains", "self-deprecating aside at the end".
+   - [ ] **No terminal punctuation** (94.4% of your messages). A trailing period reads
+         as someone else. The metric catches this one; it is listed because it is the
+         single strongest marker.
+   - [ ] **`u` / `ur` for you/your** (28.0%) but not uniformly — you also write "you"
+         in the same breath. A model that abbreviates *every* time has overshot.
+   - [ ] **Emoji as punctuation, not decoration** (24.9%). 😭 and 😐 land where a period
+         would, usually after the point, often doubled (😐😐, 😩😩😩😩). Emoji placed
+         mid-sentence or used to illustrate a noun is wrong.
+   - [ ] **ALL-CAPS for emphasis on whole clauses** (2.6%) — "ITS ALWAYS COLD DUDE
+         LMFAO", not scattered capitalised words. Rare but distinctive; v1 lost it
+         entirely, which is what the de-shouting change exists to fix.
+   - [ ] **Reaction openers** (2.3%) — "oh no", "wait", "damn" before the actual content,
+         and "tho" trailing a question (3.3%).
+
+   Also worth watching, not a style marker: **content fidelity on short inputs**. v1
+   turned "I need to pay back because I used credit" into "gotta pay back because i
+   stole credit". Style is worthless if the message no longer means what it meant.
 
 ## Open decisions
 

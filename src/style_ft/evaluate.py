@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .formatting import to_messages
+from .formatting import messages_for
 from .jsonlio import log, read_jsonl, write_jsonl
 from .style_metrics import compare
 
@@ -39,7 +39,7 @@ def _generate_all(model, tokenizer, pairs: list[dict[str, Any]], args) -> list[s
     outs: list[str] = []
     for i, pair in enumerate(pairs, 1):
         prompt = tokenizer.apply_chat_template(
-            to_messages(pair, include_response=False),
+            messages_for(pair, include_response=False),
             tokenize=False,
             add_generation_prompt=True,
         )

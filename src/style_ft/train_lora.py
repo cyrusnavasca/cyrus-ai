@@ -21,7 +21,7 @@ import json
 import sys
 from pathlib import Path
 
-from .formatting import masked_example, to_messages
+from .formatting import masked_example, messages_for
 from .jsonlio import log, read_jsonl
 
 DEFAULTS = {
@@ -66,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-steps", type=int, default=None, help="overrides --epochs; use for smoke tests")
     ap.add_argument("--no-4bit", action="store_true", help="load in 16-bit instead of 4-bit")
     ap.add_argument("--chat-template", default=None, help="override Unsloth chat template name")
+    ap.add_argument("--my-name", default="Me",
+                    help="persona name, conversational pairs only (build_chat_pairs)")
     return ap
 
 
@@ -117,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         # system prompt and the synthetic input, which the model is never asked
         # to generate.
         return Dataset.from_list(
-            [masked_example(p, tokenizer, args.max_seq_length) for p in rows]
+            [masked_example(p, tokenizer, args.max_seq_length, args.my_name) for p in rows]
         )
 
     train_ds = render(pairs)
@@ -126,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     example = train_ds[0]
     supervised = sum(1 for t in example["labels"] if t != -100)
     log(f"example rendered sample:\n"
-        f"{tokenizer.apply_chat_template(to_messages(pairs[0]), tokenize=False)[:600]}")
+        f"{tokenizer.apply_chat_template(messages_for(pairs[0], my_name=args.my_name), tokenize=False)[:600]}")
     log(f"loss is computed on {supervised}/{len(example['labels'])} tokens "
         f"of the first example (the assistant turn)")
 
@@ -197,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
                 "max_seq_length": args.max_seq_length,
                 "seed": args.seed,
                 "loss_on": "assistant_turn_only",
+                "format": "chat" if "context" in pairs[0] else "style_transfer",
+                "my_name": args.my_name,
                 "final_loss": getattr(stats, "training_loss", None),
             },
             indent=2,
