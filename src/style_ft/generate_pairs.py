@@ -99,10 +99,19 @@ def main(argv: list[str] | None = None) -> int:
 
         def emit(rec: dict[str, Any], generated: str | None) -> None:
             nonlocal rejected
-            if not generated:
+            # Every backend goes through the same gate. The ollama path also
+            # validates internally so it can resample, but the Anthropic paths
+            # used to write raw output straight into the training set, which
+            # meant a pair did not mean the same thing across providers.
+            cleaned = (
+                providers.clean_generated(generated, rec["text"], args.input_style)
+                if generated
+                else None
+            )
+            if not cleaned:
                 rejected += 1
                 return
-            fh.write(json.dumps(_pair(rec, generated, args.input_style), ensure_ascii=False) + "\n")
+            fh.write(json.dumps(_pair(rec, cleaned, args.input_style), ensure_ascii=False) + "\n")
             fh.flush()
 
         if args.provider == "dummy":

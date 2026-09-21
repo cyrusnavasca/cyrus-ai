@@ -91,8 +91,11 @@ class PromptNotAPrefixError(RuntimeError):
 
 def masked_example(
     pair: dict[str, Any], tokenizer: Any, max_seq_length: int, my_name: str = "Me"
-) -> dict[str, list[int]]:
+) -> dict[str, list[int]] | None:
     """Tokenize one pair, masking the prompt so loss falls on the reply alone.
+
+    Returns None for an example that does not fit in max_seq_length, or whose
+    reply is empty after templating.
 
     Without this the model also learns to produce the system prompt and the
     synthetic, LLM-written input - neither of which it is ever asked to generate,
@@ -118,11 +121,16 @@ def masked_example(
             "conversation, so the assistant span cannot be located."
         )
 
-    full_ids = full_ids[:max_seq_length]
-    n_prompt = min(len(prompt_ids), len(full_ids))
-    labels = [IGNORE_INDEX] * n_prompt + full_ids[n_prompt:]
+    # Truncating here would cut the reply, not the prompt: it can leave an
+    # example with every label masked (a NaN loss for a batch of them) and it
+    # strips the trailing EOS, teaching the model never to stop. Long examples
+    # are dropped by the caller instead.
+    if len(full_ids) > max_seq_length or len(prompt_ids) >= len(full_ids):
+        return None
+
+    n_prompt = len(prompt_ids)
     return {
         "input_ids": full_ids,
         "attention_mask": [1] * len(full_ids),
-        "labels": labels,
+        "labels": [IGNORE_INDEX] * n_prompt + full_ids[n_prompt:],
     }

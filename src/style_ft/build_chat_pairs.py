@@ -122,6 +122,7 @@ def build_pairs(
         aliases[key] = alias_for(key, n)
 
     pairs: list[dict[str, Any]] = []
+    kept_pairs: list[dict[str, Any]] = []
     stats = {"threads": 0, "turns": 0, "no_context": 0, "too_short": 0, "capped": 0}
 
     for thread_id, messages in by_thread.items():
@@ -193,20 +194,17 @@ def build_pairs(
 
         # One relationship can be 40% of a corpus; uncapped, the fine-tune learns
         # that relationship rather than the person. Capping is deterministic so a
-        # rerun keeps the same subset.
+        # rerun keeps the same subset. Selection is by identity, not by id: two
+        # identical replies in a thread hash alike and must be counted separately.
         if max_per_thread and len(thread_pairs) > max_per_thread:
-            keep = set(
-                p["id"]
-                for p in sorted(thread_pairs, key=lambda p: stable_rank(p["id"], "", "chatcap"))[
-                    :max_per_thread
-                ]
-            )
-            dropped = [p for p in thread_pairs if p["id"] not in keep]
-            stats["capped"] += len(dropped)
-            drop_ids = {p["id"] for p in dropped}
-            pairs = [p for p in pairs if p["id"] not in drop_ids]
+            ordered = sorted(thread_pairs, key=lambda p: stable_rank(p["id"], "", "chatcap"))
+            keep = {id(p) for p in ordered[:max_per_thread]}
+            stats["capped"] += len(thread_pairs) - len(keep)
+            kept_pairs.extend(p for p in thread_pairs if id(p) in keep)
+        else:
+            kept_pairs.extend(thread_pairs)
 
-    return pairs, stats
+    return kept_pairs, stats
 
 
 def main(argv: list[str] | None = None) -> int:

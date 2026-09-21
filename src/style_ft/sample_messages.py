@@ -80,7 +80,7 @@ def sample(
                 stats["dropped_sensitive"] += 1
                 stats["sensitive_by_pattern"].update(hits)
                 continue
-        by_year[timestamp[:4] or "unknown"].append(row)
+        by_year[timestamp[:4] if timestamp[:4].isdigit() else ""].append(row)
         stats["eligible"] += 1
 
     years = sorted(by_year)
@@ -102,6 +102,17 @@ def sample(
     # the most recent years that still have headroom.
     for y in years:
         quotas[y] = min(quotas[y], len(by_year[y]))
+    # Rounding each year independently can overshoot n as easily as undershoot
+    # it, so trim before topping up - otherwise --n is a soft cap and the cost
+    # estimate understates the run.
+    overshoot = sum(quotas.values()) - n
+    for y in years:  # trim oldest first, mirroring the recency preference
+        if overshoot <= 0:
+            break
+        take = min(quotas[y], overshoot)
+        quotas[y] -= take
+        overshoot -= take
+
     shortfall = n - sum(quotas.values())
     for y in reversed(years):
         if shortfall <= 0:

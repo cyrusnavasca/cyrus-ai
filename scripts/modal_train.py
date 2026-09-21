@@ -199,17 +199,36 @@ def train(
         "--test", test_file,
         "--adapter", f"{out_dir}/adapter",
         "--out", f"{out_dir}/predictions.jsonl",
+        "--my-name", my_name,
     ])
     vol.commit()
     return out_dir
 
 
-@app.function(image=train_image, gpu=GPU, volumes=VOLUMES, timeout=8 * 60 * 60)
+# No GPU: this only blocks on two calls that each request their own. Giving it
+# one would idle a second A100 for the entire run.
+@app.function(image=modal.Image.debian_slim(python_version="3.12"), timeout=8 * 60 * 60)
 def pipeline(run_name: str = "style-v2", limit: int = 0) -> str:
     """generate then train in one spawnable call, so a long run needs no local
     client to stay alive between the two steps."""
     generate.remote(limit=limit)
     return train.remote(run_name=run_name)
+
+
+def chat_kwargs(my_name: str) -> dict[str, object]:
+    """Settings for the conversational format, shared by the blocking and
+    spawned paths so `--wait` cannot change what gets trained.
+
+    One epoch and a wider effective batch: 35k pairs at the style path's
+    2 epochs / grad-accum 4 is roughly five GPU-hours.
+    """
+    return {
+        "train_file": "/vol/chat_train.jsonl",
+        "test_file": "/vol/chat_test.jsonl",
+        "my_name": my_name,
+        "epochs": 1,
+        "grad_accum": 8,
+    }
 
 
 @app.local_entrypoint()
@@ -233,19 +252,12 @@ def main(
     if not wait:
         # 35k conversational pairs, so one epoch and a wider effective batch:
         # at the style path's settings this would be ~5 GPU-hours.
-        chat = {
-            "train_file": "/vol/chat_train.jsonl",
-            "test_file": "/vol/chat_test.jsonl",
-            "my_name": my_name,
-            "epochs": 1,
-            "grad_accum": 8,
-        }
         spawns = {
             "generate": (generate, {"limit": limit}),
             "train": (train, {"run_name": run_name}),
             # Conversational pairs are built locally by build_chat_pairs and
             # pushed to the volume, so this step never touches the generator.
-            "chat": (train, {"run_name": run_name, **chat}),
+            "chat": (train, {"run_name": run_name, **chat_kwargs(my_name)}),
             "all": (pipeline, {"run_name": run_name, "limit": limit}),
         }
         fn, kwargs = spawns[step]
@@ -257,7 +269,7 @@ def main(
     if step in {"generate", "all"}:
         print(generate.remote(limit=limit))
     if step == "chat":
-        print(f"done -> {train.remote(run_name=run_name, train_file='/vol/chat_train.jsonl', test_file='/vol/chat_test.jsonl', my_name=my_name)}")
+        print(f"done -> {train.remote(run_name=run_name, **chat_kwargs(my_name))}")
     if step in {"train", "all"}:
         print(f"done -> {train.remote(run_name=run_name)}")
     print("pull results with: modal volume get style-ft /outputs ./outputs")

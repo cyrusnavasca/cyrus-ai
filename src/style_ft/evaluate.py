@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .formatting import messages_for
+from .formatting import chat_transcript, messages_for
 from .jsonlio import log, read_jsonl, write_jsonl
 from .style_metrics import compare
 
@@ -39,7 +39,7 @@ def _generate_all(model, tokenizer, pairs: list[dict[str, Any]], args) -> list[s
     outs: list[str] = []
     for i, pair in enumerate(pairs, 1):
         prompt = tokenizer.apply_chat_template(
-            messages_for(pair, include_response=False),
+            messages_for(pair, include_response=False, my_name=args.my_name),
             tokenize=False,
             add_generation_prompt=True,
         )
@@ -111,7 +111,9 @@ def cmd_generate(args) -> int:
     rows = [
         {
             "id": p.get("id", ""),
-            "input": p["input"],
+            # Conversational pairs carry `context`, not `input`; render the
+            # transcript so the report reads the same for both formats.
+            "input": p["input"] if "input" in p else chat_transcript(p["context"]),
             "reference": p["output"],
             "base_output": b,
             "tuned_output": t,
@@ -214,6 +216,9 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--top-p", type=float, default=GEN_DEFAULTS["top_p"])
     g.add_argument("--min-p", type=float, default=GEN_DEFAULTS["min_p"])
     g.add_argument("--no-4bit", action="store_true")
+    # Must match the --my-name used for training: the conversational system
+    # prompt names the persona, and a mismatch silently depresses every number.
+    g.add_argument("--my-name", default="Me")
     g.set_defaults(func=cmd_generate)
 
     r = sub.add_parser("report", help="render the side-by-side report (no GPU)")

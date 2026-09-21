@@ -118,9 +118,16 @@ def main(argv: list[str] | None = None) -> int:
         # only. Training on the prompt too would spend capacity reproducing the
         # system prompt and the synthetic input, which the model is never asked
         # to generate.
-        return Dataset.from_list(
-            [masked_example(p, tokenizer, args.max_seq_length, args.my_name) for p in rows]
-        )
+        built = [
+            masked_example(p, tokenizer, args.max_seq_length, args.my_name) for p in rows
+        ]
+        kept = [ex for ex in built if ex is not None]
+        if len(kept) < len(built):
+            log(f"dropped {len(built) - len(kept)} examples longer than "
+                f"--max-seq-length {args.max_seq_length}")
+        if not kept:
+            raise SystemExit("every example exceeded --max-seq-length")
+        return Dataset.from_list(kept)
 
     train_ds = render(pairs)
     eval_ds = render(list(read_jsonl(args.eval))) if args.eval else None

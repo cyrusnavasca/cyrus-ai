@@ -274,11 +274,15 @@ class TestLossMasking(unittest.TestCase):
             add_generation_prompt=True))["input_ids"])
         self.assertEqual(ex["labels"][:n_prompt], [formatting.IGNORE_INDEX] * n_prompt)
 
-    def test_truncation_keeps_arrays_aligned(self) -> None:
-        ex = formatting.masked_example(self.PAIR, FakeTokenizer(), 4)
-        self.assertEqual(len(ex["input_ids"]), 4)
-        self.assertEqual(len(ex["labels"]), 4)
-        self.assertEqual(len(ex["attention_mask"]), 4)
+    def test_overlong_examples_are_dropped_not_truncated(self) -> None:
+        # Truncating cuts the reply, not the prompt: it can mask every label
+        # (NaN loss) and strips the EOS, teaching the model never to stop.
+        self.assertIsNone(formatting.masked_example(self.PAIR, FakeTokenizer(), 4))
+
+    def test_arrays_stay_aligned(self) -> None:
+        ex = formatting.masked_example(self.PAIR, FakeTokenizer(), 2048)
+        self.assertEqual(len(ex["input_ids"]), len(ex["labels"]))
+        self.assertEqual(len(ex["attention_mask"]), len(ex["labels"]))
 
     def test_raises_when_prompt_is_not_a_prefix(self) -> None:
         with self.assertRaises(formatting.PromptNotAPrefixError):
@@ -381,3 +385,14 @@ class TestChatPairs(unittest.TestCase):
         supervised = [t for t in ex["labels"] if t != formatting.IGNORE_INDEX]
         self.assertTrue(supervised)
         self.assertLess(len(supervised), len(ex["labels"]))
+
+
+class TestAllProvidersValidated(unittest.TestCase):
+    def test_emit_gate_applies_to_every_provider(self) -> None:
+        # The Anthropic paths do not clean their own output, so the shared
+        # emit() gate is what keeps a pair meaning the same thing regardless of
+        # which backend produced it.
+        src = Path(__file__).resolve().parents[1] / "src" / "style_ft" / "generate_pairs.py"
+        body = src.read_text()
+        emit = body[body.index("def emit("): body.index("if args.provider ==")]
+        self.assertIn("clean_generated", emit)

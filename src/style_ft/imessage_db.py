@@ -223,9 +223,13 @@ def read_messages(
             if not text:
                 continue
             timestamp = apple_time_to_iso(row["date"])
-            if since and timestamp and timestamp[:10] < since:
+            # An undated row cannot be shown to fall inside the window, so a
+            # date filter drops it rather than letting it through unchecked.
+            if (since or until) and not timestamp:
                 continue
-            if until and timestamp and timestamp[:10] > until:
+            if since and timestamp[:10] < since:
+                continue
+            if until and timestamp[:10] > until:
                 continue
             chat_rowid = row["chat_rowid"]
             if thread_key == "participants" and chat_rowid is not None:
