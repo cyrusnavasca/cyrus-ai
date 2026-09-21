@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from style_ft import build_chat_pairs, dummy_data, evaluate, formatting, providers, split_dataset, style_metrics  # noqa: E402
+from style_ft import build_chat_pairs, clean_messages, dummy_data, evaluate, formatting, providers, split_dataset, style_metrics  # noqa: E402
 from style_ft.filter_messages import filter_messages, is_symbol_only, normalize  # noqa: E402
 from style_ft.formatting import to_messages  # noqa: E402
 from style_ft.generate_pairs import message_id  # noqa: E402
@@ -396,3 +396,58 @@ class TestAllProvidersValidated(unittest.TestCase):
         body = src.read_text()
         emit = body[body.index("def emit("): body.index("if args.provider ==")]
         self.assertIn("clean_generated", emit)
+
+
+class TestCleanMessages(unittest.TestCase):
+    """Artifacts found in the real corpus, not hypothetical ones."""
+
+    def rows(self, *texts):
+        return [
+            {"text": t, "direction": d, "thread_id": "t1",
+             "timestamp": f"2026-01-01T10:{i:02d}:00+00:00"}
+            for i, (t, d) in enumerate(texts)
+        ]
+
+    def test_edit_replaces_the_message_it_corrects(self) -> None:
+        # chat.db writes an edit as its own row after the original, so the
+        # corpus holds both the typo and the fix.
+        rows = self.rows(("i have to show u the thing said kelsey", "out"),
+                         ('Edited to “i have to show u the thing since kelsey”', "out"))
+        out, stats = clean_messages.clean(rows)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["text"], "i have to show u the thing since kelsey")
+        self.assertEqual(stats["edits_applied"], 1)
+
+    def test_edit_applies_to_the_same_speaker(self) -> None:
+        rows = self.rows(("You seen her ?", "in"), ("bruh", "out"),
+                         ('Edited to “It’s crazy \U0001f480”', "in"))
+        out, _ = clean_messages.clean(rows)
+        texts = [r["text"] for r in out]
+        self.assertIn("It’s crazy \U0001f480", texts)
+        self.assertIn("bruh", texts)
+        self.assertNotIn("You seen her ?", texts)
+
+    def test_orphan_edit_is_kept_as_its_text(self) -> None:
+        out, stats = clean_messages.clean(self.rows(('Edited to “ok”', "in")))
+        self.assertEqual([r["text"] for r in out], ["ok"])
+        self.assertEqual(stats["edits_orphaned"], 1)
+
+    def test_drops_attachment_only_and_pasted_and_dupes(self) -> None:
+        rows = self.rows(("￼", "out"), ("x" * 400, "out"),
+                         ("same", "out"), ("same", "out"),
+                         ("https://example.com", "out"),
+                         ('Liked “nice”', "in"))
+        out, stats = clean_messages.clean(rows)
+        self.assertEqual([r["text"] for r in out], ["same"])
+        for key in ("empty", "pasted", "duplicate", "url_only", "reaction"):
+            self.assertEqual(stats[key], 1, key)
+
+    def test_keeps_emoji_only_and_one_word(self) -> None:
+        # 9% of this person's messages; style, not noise.
+        out, _ = clean_messages.clean(self.rows(("\U0001f62d\U0001f62d", "out"), ("nah", "out")))
+        self.assertEqual([r["text"] for r in out], ["\U0001f62d\U0001f62d", "nah"])
+
+    def test_same_text_not_consecutive_is_kept(self) -> None:
+        out, _ = clean_messages.clean(
+            self.rows(("ok", "out"), ("then what", "in"), ("ok", "out")))
+        self.assertEqual(len(out), 3)
