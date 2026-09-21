@@ -58,6 +58,7 @@ DEFAULT_PARTNER = "Friend 1"
 
 # The context window the pairs were built with. Sending more turns than the
 # model was trained on degrades it rather than helping.
+TEMPERATURE = 0.5
 CONTEXT_TURNS = 6
 
 PAGE = """<!doctype html>
@@ -254,7 +255,8 @@ class Worker:
         return self.loaded[name]
 
     @modal.method()
-    def reply(self, history: list, run: str, partner: str = DEFAULT_PARTNER) -> dict:
+    def reply(self, history: list, run: str, partner: str = DEFAULT_PARTNER,
+              temperature: float = TEMPERATURE) -> dict:
         import json
         import time
 
@@ -287,7 +289,17 @@ class Worker:
         inputs = tokenizer(text, return_tensors="pt").to(model.device)
         with torch.no_grad():
             out = model.generate(
-                **inputs, max_new_tokens=96, do_sample=True, temperature=0.7,
+                # Well below the usual 0.7. Texting is a
+                # high-entropy target (base ppl 120, tuned 20.6 held out), so
+                # the reply distribution is genuinely flat and 0.7 samples deep
+                # enough into it to pick a fluent message about something else:
+                # asked "have you heard from joe?" it answers "are u going to
+                # his game?" or "u want coffee". Sharpening keeps it on topic
+                # and, counter-intuitively, yields MORE emoji - they are
+                # frequent in the real replies, so the mode moves toward them.
+                # 0.35 never wanders but goes flat ("yea", "okok"); 0.5 keeps
+                # the voice. Overridable per request for retuning.
+                **inputs, max_new_tokens=96, do_sample=True, temperature=temperature,
                 top_p=0.9, repetition_penalty=1.1,
                 pad_token_id=tokenizer.eos_token_id,
             )
@@ -327,7 +339,9 @@ def web():
         if not history or run not in runs():
             raise HTTPException(status_code=400, detail="unknown run or empty history")
         partner = body.get("partner") or DEFAULT_PARTNER
-        call = Worker().reply.spawn(history=history, run=run, partner=partner)
+        temperature = float(body.get("temperature") or TEMPERATURE)
+        call = Worker().reply.spawn(history=history, run=run, partner=partner,
+                                    temperature=temperature)
         return JSONResponse({"id": call.object_id})
 
     @api.get("/result")
