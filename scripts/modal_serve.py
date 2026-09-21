@@ -48,7 +48,13 @@ TOKEN = os.environ.get("STYLE_FT_TOKEN", "cyrus-dev")
 # Training never saw the label "a friend" - every conversation was with an
 # aliased handle. Using one the model actually met keeps inference in
 # distribution; this is the alias of the thread that dominates the corpus.
-DEFAULT_PARTNER = "Friend 6"
+# Who the model is told it is texting. This matters more than it looks: the
+# alias picks which relationship's register the adapter falls into, and one
+# thread is 58% of the training pairs. Naming that thread makes every reply
+# read like a message to a partner ("morning love!!") regardless of what was
+# typed. Friend 1 is the largest ordinary-friend DM, which is the neutral
+# register a stranger typing into this page expects.
+DEFAULT_PARTNER = "Friend 1"
 
 # The context window the pairs were built with. Sending more turns than the
 # model was trained on degrades it rather than helping.
@@ -248,7 +254,7 @@ class Worker:
         return self.loaded[name]
 
     @modal.method()
-    def reply(self, history: list, run: str) -> dict:
+    def reply(self, history: list, run: str, partner: str = DEFAULT_PARTNER) -> dict:
         import json
         import time
 
@@ -264,12 +270,12 @@ class Worker:
         # are the incoming side and the model supplies the replies. Only chat
         # adapters reach here; see runs().
         turns = [
-            {"speaker": DEFAULT_PARTNER if m.get("me") else my_name,
+            {"speaker": partner if m.get("me") else my_name,
              "text": m.get("text", "")}
             for m in history[-CONTEXT_TURNS:]
         ]
         pair = {"context": turns, "output": "",
-                "meta": {"with": DEFAULT_PARTNER, "is_group": False}}
+                "meta": {"with": partner, "is_group": False}}
 
         started = time.time()
         model, tokenizer = self._model(f"/vol/outputs/{run}/adapter")
@@ -320,7 +326,8 @@ def web():
         run = body.get("run") or ""
         if not history or run not in runs():
             raise HTTPException(status_code=400, detail="unknown run or empty history")
-        call = Worker().reply.spawn(history=history, run=run)
+        partner = body.get("partner") or DEFAULT_PARTNER
+        call = Worker().reply.spawn(history=history, run=run, partner=partner)
         return JSONResponse({"id": call.object_id})
 
     @api.get("/result")
