@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Training env. CUDA GPU required — Unsloth has no Apple Silicon build.
+# Training environment. CUDA GPU required - Unsloth has no Apple Silicon build.
 # Run this on Colab / Runpod / Lambda / any rented GPU box.
+#
+# Not needed if you train through Modal (deploy/train.py); that builds its own
+# image with the same dependency set.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -9,7 +12,7 @@ import sys
 try:
     import torch
 except ImportError:
-    print("torch not installed yet — continuing, unsloth will pull a build."); sys.exit(0)
+    print("torch not installed yet - continuing, unsloth will pull a build."); sys.exit(0)
 print("torch", torch.__version__)
 print("cuda available:", torch.cuda.is_available())
 if torch.cuda.is_available():
@@ -20,10 +23,9 @@ else:
 PY
 
 pip install --upgrade pip
-pip install -r requirements-train.txt
-pip install -e .
+pip install -e ".[train]"
 
 echo
 echo "GPU smoke fine-tune (tiny model, 5 steps, proves the loop):"
-echo "  python -m style_ft.train_lora --train data/dummy/train.jsonl \\"
+echo "  style-ft train --train data/dummy/chat_train.jsonl \\"
 echo "      --output-dir outputs/smoke/lora --base-model unsloth/Qwen2.5-0.5B-Instruct --max-steps 5"

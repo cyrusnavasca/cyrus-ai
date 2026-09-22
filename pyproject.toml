@@ -4,10 +4,55 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "style-ft"
-version = "0.1.0"
-description = "Fine-tune an open LLM to write in my personal texting style"
+version = "0.2.0"
+description = "Fine-tune an open LLM on a personal iMessage history so it texts in that voice"
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["anthropic>=0.40.0"]
+license = { file = "LICENSE" }
+authors = [{ name = "Cyrus Navasca" }]
+keywords = ["llm", "lora", "fine-tuning", "unsloth", "imessage"]
+
+# The corpus pipeline is deliberately dependency-free: it is pure stdlib, so a
+# clean checkout can go from chat.db to a training set with nothing installed.
+dependencies = []
+
+[project.optional-dependencies]
+# CUDA only - Unsloth has no Apple Silicon build. Install unsloth first; it pins
+# compatible torch and transformers builds.
+train = [
+    "unsloth",
+    "unsloth_zoo",
+    "transformers>=4.44",
+    "peft>=0.12",
+    "trl>=0.9",
+    "datasets>=2.20",
+    "bitsandbytes>=0.43",
+    "accelerate>=0.33",
+    "torch>=2.3",
+]
+# Renting the GPU and serving the adapter.
+deploy = ["modal>=0.64", "fastapi>=0.110"]
+dev = ["ruff>=0.6"]
+
+[project.scripts]
+style-ft = "style_ft.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
+# RUF001/RUF003: the corpus is real text messages, so curly quotes and emoji in
+# string literals and comments are the subject matter, not a typo.
+ignore = ["E501", "RUF001", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# Deploy and probe scripts import heavy GPU libraries inside the Modal function
+# bodies on purpose: they must not be imported on the machine that submits the job.
+"deploy/*.py" = ["PLC0415"]
+"tools/*.py" = ["E402", "PLC0415"]

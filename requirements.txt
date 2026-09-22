@@ -1,2 +1,0 @@
-# Core pipeline (steps 2, 3, 5-reporting). Runs on any machine, no GPU.
-anthropic>=0.40.0

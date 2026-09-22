@@ -1,12 +1,16 @@
-# data — never commit personal messages
+# Personal message data never gets committed. Only the synthetic export
+# fixtures the smoke test runs on are tracked.
 data/raw/*
 data/interim/*
 data/processed/*
+data/dummy/*.jsonl
 !data/**/.gitkeep
-!data/dummy/
+
+# Run outputs: adapters, predictions, reports.
 outputs/
-*.jsonl
-!data/dummy/*.jsonl
+
+# Resume source material, not part of the project.
+docs/implementation-summary.md
 
 # python
 __pycache__/
@@ -16,6 +20,7 @@ venv/
 env/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
 
 # models
 *.safetensors
@@ -24,5 +29,6 @@ env/
 checkpoints/
 adapters/
 
+# Names real contacts: thread list, persona name, serving token.
 .env
 .DS_Store
