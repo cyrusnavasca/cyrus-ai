@@ -17,7 +17,11 @@ container can exceed that, so the page spawns the work and polls for it:
   web      CPU only, spawns a Worker call and reports its status
 
 Access is gated on a token: this model writes in one specific person's voice and
-was trained on their friends' messages. Set STYLE_FT_TOKEN before deploying.
+was trained on their friends' messages, none of whom agreed to be a public demo.
+STYLE_FT_TOKEN is required at deploy time and has no default - a fallback value
+committed to a public repo is not a gate, it is a published password.
+
+  modal secret create style-ft-token STYLE_FT_TOKEN=<something long and random>
 """
 
 # No `from __future__ import annotations`: it turns route annotations into
@@ -43,7 +47,9 @@ image = (
     .add_local_dir(REPO / "src" / "style_ft", "/root/style_ft")
 )
 
-TOKEN = os.environ.get("STYLE_FT_TOKEN", "cyrus-dev")
+# No default on purpose. Failing the deploy is the correct outcome: a missing
+# token should not silently fall back to one an attacker can read in git.
+TOKEN = os.environ["STYLE_FT_TOKEN"]
 
 # Training never saw the label "a friend" - every conversation was with an
 # aliased handle. Using one the model actually met keeps inference in

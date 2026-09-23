@@ -21,5 +21,7 @@ jobs:
         run: ruff check .
       - name: unit tests
         run: python -m unittest discover -t . -s tests -v
+      - name: shell scripts parse
+        run: for f in scripts/*.sh; do bash -n "$f"; done
       - name: end-to-end pipeline on synthetic data
         run: bash scripts/smoke_test.sh

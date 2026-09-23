@@ -154,9 +154,11 @@ gives a reference / base / tuned side-by-side plus surface-style metrics
 Those metrics are a regression signal, not a verdict — read the side-by-side.
 `docs/design.md` has the full metric definitions and the decision rule.
 
-**Serving.** `deploy/serve.py` is a FastAPI app plus a single-file chat page. Two
-Modal functions on purpose: Modal caps a web request at 150 seconds and then
-answers with a 303 to a result URL, which a browser fetch cannot follow across
+**Serving.** `deploy/serve.py` is a FastAPI app plus a single-file chat page.
+`STYLE_FT_TOKEN` is required and has no default — a fallback committed to a
+public repo is a published password, not a gate. Two Modal functions on purpose:
+Modal caps a web request at 150 seconds and then answers with a 303 to a result
+URL, which a browser fetch cannot follow across
 origins. Loading an 8B model on a cold container can exceed that, so the page
 spawns the work and polls for it. Access is token-gated — the model writes in one
 person's voice and was trained on their friends' messages.
