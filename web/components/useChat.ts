@@ -8,6 +8,11 @@ import type { Budget } from "../lib/limits";
 import { type Message, restore, toHistory } from "../lib/thread";
 
 const STORAGE_KEY = "cyrusgpt:thread:v1";
+// crypto.randomUUID is missing on non-HTTPS origins and iOS < 15.4.
+const newId = () =>
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function useChat() {
@@ -37,7 +42,7 @@ export function useChat() {
       if (!r.ok) return;
       const b = (await r.json()) as Budget;
       setBudget(b);
-      setDead(isExhausted(b));
+      setDead((d) => d || isExhausted(b));
     } catch {
       // The meter is a nicety; the page works without it.
     }
@@ -72,7 +77,7 @@ export function useChat() {
       if (!text || busy.current) return;
       busy.current = true;
       setNotice(null);
-      const mine: Message = { id: crypto.randomUUID(), me: true, text, at: Date.now(), status: "sending" };
+      const mine: Message = { id: newId(), me: true, text, at: Date.now(), status: "sending" };
       commit([...ref.current, mine]);
       setWaitingSince(Date.now());
 
@@ -87,7 +92,7 @@ export function useChat() {
       setWaitingSince(null);
       busy.current = false;
       if (outcome.kind === "reply") {
-        commit([...ref.current, { id: crypto.randomUUID(), me: false, text: outcome.text, at: Date.now(), status: "received" }]);
+        commit([...ref.current, { id: newId(), me: false, text: outcome.text, at: Date.now(), status: "received" }]);
       } else {
         patch(mine.id, { status: "failed" });
         if (outcome.kind === "limit") setNotice(outcome.reason === "minute" ? COPY.limitMinute : COPY.limitDay);

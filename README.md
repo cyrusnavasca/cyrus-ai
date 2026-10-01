@@ -187,7 +187,7 @@ Before the URL is shared:
    `outputs/probe_leaks/<run>.jsonl`. If replies contain real names, numbers,
    addresses or private details, do not launch: fix the data and retrain.
 4. On Vercel: import the repo, set Root Directory to `web`, add Upstash Redis
-   from the Marketplace, and set the variables in `web/.env.example` (not
+   from the Marketplace (it injects UPSTASH_REDIS_REST_* or KV_REST_API_*; either works), and set the variables in `web/.env.example` (not
    `MOCK_MODAL`) for Production and Preview.
 5. On a Preview deployment, set `DAILY_MESSAGE_CAP=1` and confirm the second
    text shows the dead-battery state; then put it back.

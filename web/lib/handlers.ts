@@ -1,6 +1,6 @@
 import type { Config } from "./config";
-import { type Counter, chargeBudget, checkIp, readBudget, refundBudget } from "./limits";
-import type { ModalClient } from "./modal";
+import { type Budget, type Counter, chargeBudget, checkIp, readBudget, refundBudget } from "./limits";
+import { ModalError, type ModalClient } from "./modal";
 import { signTicket, verifyTicket } from "./ticket";
 import { validateHistory } from "./validate";
 
@@ -84,10 +84,15 @@ export async function handleSend(req: Request, deps: Deps): Promise<Response> {
     deps.log("send.ok", { turns: v.history.length, chars: v.history[v.history.length - 1].text.length });
     return json({ ticket: signTicket(id, deps.config.ticketSecret) });
   } catch (e) {
-    try {
-      await refundBudget(deps.counter, now);
-    } catch (refundError) {
-      deps.log("send.refund_error", { error: errorText(refundError) });
+    if (e instanceof ModalError && e.status !== undefined) {
+      try {
+        await refundBudget(deps.counter, now);
+      } catch (refundError) {
+        deps.log("send.refund_error", { error: errorText(refundError) });
+      }
+    } else {
+      // A timeout or dropped connection may still have spawned the GPU job, so the message stays charged.
+      deps.log("send.spawn_ambiguous", { error: errorText(e) });
     }
     deps.log("send.modal_error", { error: errorText(e) });
     return json({ error: "upstream" }, 502);
@@ -108,10 +113,21 @@ export async function handlePoll(req: Request, deps: Deps): Promise<Response> {
   }
 }
 
+const budgetCache = new WeakMap<Counter, { at: number; value: Budget }>();
+const BUDGET_CACHE_MS = 10_000;
+
 export async function handleBudget(deps: Deps): Promise<Response> {
   try {
-    const b = await readBudget(deps.counter, deps.config.limits, deps.now());
-    return json(b, 200, { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" });
+    const now = deps.now();
+    const hit = budgetCache.get(deps.counter);
+    let b: Budget;
+    if (hit && now.getTime() - hit.at < BUDGET_CACHE_MS) {
+      b = hit.value;
+    } else {
+      b = await readBudget(deps.counter, deps.config.limits, now);
+      budgetCache.set(deps.counter, { at: now.getTime(), value: b });
+    }
+    return json(b, 200, { "Cache-Control": "public, s-maxage=10" });
   } catch (e) {
     deps.log("budget.error", { error: errorText(e) });
     return json({ error: "unavailable" }, 503);

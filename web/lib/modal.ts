@@ -13,7 +13,10 @@ export interface ModalClient {
 }
 
 export class ModalError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
     super(message);
     this.name = "ModalError";
   }
@@ -33,7 +36,7 @@ export function modalClient(
         // The CPU web container can itself be cold; give it room, but not forever.
         signal: AbortSignal.timeout(25_000),
       });
-      if (!res.ok) throw new ModalError(`generate returned ${res.status}`);
+      if (!res.ok) throw new ModalError(`generate returned ${res.status}`, res.status);
       const data = (await res.json().catch(() => ({}))) as { id?: unknown };
       if (typeof data.id !== "string") throw new ModalError("generate returned no id");
       return data.id;
@@ -44,7 +47,7 @@ export function modalClient(
         signal: AbortSignal.timeout(10_000),
       });
       if (res.status === 202) return { pending: true };
-      if (!res.ok) throw new ModalError(`result returned ${res.status}`);
+      if (!res.ok) throw new ModalError(`result returned ${res.status}`, res.status);
       const data = (await res.json().catch(() => ({}))) as { reply?: unknown };
       if (typeof data.reply !== "string") throw new ModalError("result returned no reply");
       return { pending: false, reply: data.reply };

@@ -2,6 +2,8 @@ import { getDeps } from "../../../lib/deps";
 import { handleSend } from "../../../lib/handlers";
 
 export const dynamic = "force-dynamic";
+// Covers modal.ts's 25s spawn timeout so the charge is never cut off mid-call.
+export const maxDuration = 30;
 
 export async function POST(req: Request): Promise<Response> {
   const d = getDeps();

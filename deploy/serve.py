@@ -334,7 +334,15 @@ class Worker:
 
 # CPU only: this container just spawns work and reports on it, so it stays warm
 # cheaply and never competes for a GPU.
-@app.function(image=image, volumes={"/vol": vol}, scaledown_window=300, timeout=300)
+# Polling is free of GPU but not of Modal credit: cap the CPU side too, so a poll flood queues instead of scaling out the (large) image.
+@app.function(
+    image=image,
+    volumes={"/vol": vol},
+    scaledown_window=300,
+    timeout=300,
+    max_containers=2,
+)
+@modal.concurrent(max_inputs=20)
 @modal.asgi_app()
 def web():
     import json

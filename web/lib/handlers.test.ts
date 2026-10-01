@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "./config";
 import { type Deps, handleBudget, handlePoll, handleSend } from "./handlers";
-import { type Counter, readBudget } from "./limits";
+import { type Counter, budgetKeys, readBudget } from "./limits";
 import { memoryCounter } from "./memoryCounter";
-import type { ModalClient } from "./modal";
+import { ModalError, type ModalClient } from "./modal";
 import { signTicket } from "./ticket";
 import type { Turn } from "./validate";
 
@@ -115,10 +115,18 @@ describe("handleSend", () => {
 
   it("refunds the budget when Modal fails", async () => {
     const { deps } = setup({
-      deps: { modal: { spawn: async () => { throw new Error("boom"); }, result: async () => ({ pending: true }) } },
+      deps: { modal: { spawn: async () => { throw new ModalError("generate returned 500", 500); }, result: async () => ({ pending: true }) } },
     });
     expect((await handleSend(sendReq(hi), deps)).status).toBe(502);
     expect((await used(deps)).today.used).toBe(0);
+  });
+
+  it("keeps the charge when the spawn outcome is unknown", async () => {
+    const { deps } = setup({
+      deps: { modal: { spawn: async () => { throw new DOMException("timeout", "TimeoutError"); }, result: async () => ({ pending: true }) } },
+    });
+    expect((await handleSend(sendReq(hi), deps)).status).toBe(502);
+    expect((await used(deps)).today.used).toBe(1);
   });
 
   it("refunds the same day it charged when the failure straddles midnight UTC", async () => {
@@ -128,7 +136,7 @@ describe("handleSend", () => {
     const { deps } = setup({
       deps: {
         now,
-        modal: { spawn: async () => { throw new Error("boom"); }, result: async () => ({ pending: true }) },
+        modal: { spawn: async () => { throw new ModalError("generate returned 500", 500); }, result: async () => ({ pending: true }) },
       },
     });
     await handleSend(sendReq(hi), deps);
@@ -204,6 +212,17 @@ describe("handleBudget", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toContain("s-maxage=10");
     expect(await res.json()).toEqual({ today: { used: 1, cap: 120 }, month: { used: 1, cap: 3000 } });
+  });
+
+  it("serves a cached read for 10 seconds", async () => {
+    let t = NOW.getTime();
+    const { deps } = setup({ deps: { now: () => new Date(t) } });
+    await handleSend(sendReq(hi), deps);
+    const first = await (await handleBudget(deps)).json();
+    await deps.counter.incr(budgetKeys(NOW).day);
+    expect((await (await handleBudget(deps)).json()).today.used).toBe(first.today.used);
+    t += 11_000;
+    expect((await (await handleBudget(deps)).json()).today.used).toBe(first.today.used + 1);
   });
 
   it("returns 503 when the counter store is down", async () => {

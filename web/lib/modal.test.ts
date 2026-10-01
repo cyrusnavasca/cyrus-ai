@@ -32,6 +32,7 @@ describe("modalClient.spawn", () => {
   it("throws ModalError on a non-2xx", async () => {
     const { f } = fakeFetch(json(400, { detail: "unknown run" }));
     await expect(modalClient(CFG, f).spawn([{ me: true, text: "hi" }])).rejects.toBeInstanceOf(ModalError);
+    await expect(modalClient(CFG, f).spawn([{ me: true, text: "hi" }])).rejects.toMatchObject({ status: 400 });
   });
 
   it("throws ModalError when the id is missing", async () => {
