@@ -4,7 +4,7 @@
 export type LinkItem = { label: string; href: string; icon: string };
 
 export const LINKS: LinkItem[] = [
-  { label: "GitHub Repo", href: "", icon: "/links/github.png" },
-  { label: "My LinkedIn", href: "", icon: "/links/linkedin.png" },
+  { label: "GitHub Repo", href: "https://github.com/cyrusnavasca/cyrus-ai", icon: "/links/github.png" },
+  { label: "My LinkedIn", href: "", icon: "/links/linkedin.webp" },
   { label: "My Portfolio", href: "", icon: "/links/portfolio.png" },
 ];
