@@ -25,15 +25,22 @@ TEMPERATURE_RANGE = (0.3, 0.8)
 
 REDACTED = "[redacted]"
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-# A run of digits and phone punctuation, starting and ending on a digit. Slashes,
-# colons and commas are left out on purpose, so dates, times and amounts never
-# match; whether a match is a phone number is decided by its digit count below.
-_PHONE = re.compile(r"(?<![\w.])\+?\d[\d\s().-]{5,}\d(?!\w)")
-_LOCAL = re.compile(r"\d{3}[-.\s]\d{4}")
+# Explicit phone shapes rather than "enough digits": a texting corpus is full of
+# dates, times, scores and ranges, and a digit-count rule eats "2026-10-01 12:30".
+_PHONES = [
+    # North American: optional +1, area code (optionally in parens), 3, 4.
+    re.compile(r"(?<![\w+])(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}(?!\w)"),
+    # International with a leading +: country code, then 2-5 groups of 2-4 digits.
+    re.compile(r"(?<![\w+])\+[1-9]\d{0,2}(?:[\s.-]?\d{2,4}){2,5}(?!\w)"),
+    # Seven-digit local number, dash or dot only ("555-0123").
+    re.compile(r"(?<![\w+.-])\d{3}[-.]\d{4}(?![\w]|[-.]\d)"),
+]
 
 
 def clean_history(history: object, turns: int = CONTEXT_TURNS) -> list[dict]:
     """The last `turns` turns as {"me", "text"}, stripped and clamped, or ValueError."""
+    if turns < 1:
+        raise ValueError("turns must be at least 1")
     if not isinstance(history, list) or not history:
         raise ValueError("history must be a non-empty list")
     recent = history[-turns:]
@@ -61,7 +68,7 @@ def clamp_temperature(value: object, default: float = TEMPERATURE_DEFAULT) -> fl
         return default
     try:
         t = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     if not math.isfinite(t):
         return default
@@ -74,16 +81,13 @@ def pick_partner(value: object, allowed: Iterable[str], default: str) -> str:
     return value if isinstance(value, str) and value in set(allowed) else default
 
 
-def _phone(match: re.Match[str]) -> str:
-    s = match.group(0)
-    digits = sum(c.isdigit() for c in s)
-    return REDACTED if digits >= 10 or _LOCAL.fullmatch(s) else s
-
-
 def redact(text: str) -> str:
     """Replace email addresses and phone numbers with REDACTED.
 
     A backstop for memorized contact details reaching a public page, not a fix
     for memorization: names and street addresses pass straight through.
     """
-    return _PHONE.sub(_phone, _EMAIL.sub(REDACTED, text))
+    text = _EMAIL.sub(REDACTED, text)
+    for pattern in _PHONES:
+        text = pattern.sub(REDACTED, text)
+    return text

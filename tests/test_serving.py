@@ -59,10 +59,14 @@ class CleanHistoryTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             clean_history([{"me": False, "text": "hey"}, {"me": True, "text": "   "}])
 
+    def test_rejects_turns_less_than_one(self):
+        with self.assertRaises(ValueError):
+            clean_history([{"me": True, "text": "hi"}], turns=0)
+
 
 class TemperatureTest(unittest.TestCase):
     def test_default_for_missing_or_junk(self):
-        for value in (None, "", "hot", float("nan"), float("inf"), [0.5]):
+        for value in (None, "", "hot", float("nan"), float("inf"), [0.5], 10**400):
             with self.subTest(value=value):
                 self.assertEqual(clamp_temperature(value), TEMPERATURE_DEFAULT)
 
@@ -91,7 +95,9 @@ class RedactTest(unittest.TestCase):
             "415.555.0123": REDACTED,
             "uk is +44 20 7946 0958": f"uk is {REDACTED}",
             "just 555-0123": f"just {REDACTED}",
-            "415-555-0123 415-555-0199": REDACTED,
+            "415-555-0123 415-555-0199": f"{REDACTED} {REDACTED}",
+            "(415) 555-0123": REDACTED,
+            "call.4155550123": f"call.{REDACTED}",
         }
         for text, want in cases.items():
             with self.subTest(text=text):
@@ -103,9 +109,14 @@ class RedactTest(unittest.TestCase):
 
     def test_leaves_ordinary_numbers_alone(self):
         for text in ("meet at 9:41", "it was $12.50", "class of 2024", "2019-2024 was wild",
-                     "10/01/2026", "lol 100", "i owe you 1,000,000", "1234567", "😭💀", ""):
+                     "10/01/2026", "lol 100", "i owe you 1,000,000", "1234567", "😭💀", "",
+                     "2026-10-01 12:30", "scored 10 20 30 40 50", "100 2000", "2019-2024-2025"):
             with self.subTest(text=text):
                 self.assertEqual(redact(text), text)
+
+    def test_known_limit_three_four_ranges(self):
+        # a 3-digit/4-digit range is indistinguishable from a local number; accepted.
+        self.assertEqual(redact("200-3000 cal"), f"{REDACTED} cal")
 
 
 if __name__ == "__main__":
