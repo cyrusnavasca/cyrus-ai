@@ -60,6 +60,7 @@ src/style_ft/
   common/       JSONL I/O, deterministic ranking
   cli.py        `style-ft <stage>`
 deploy/         Modal apps: train.py rents the GPU, serve.py serves the chat page
+web/            Next.js public chat page for Vercel: iMessage UI, proxy routes, budget limits
 tools/          one-off diagnostics (underfit probe, collator probe, fake predictions)
 scripts/        setup, corpus rebuild, end-to-end smoke test
 .env.example    thread curation, persona name, serving token
@@ -162,6 +163,35 @@ URL, which a browser fetch cannot follow across
 origins. Loading an 8B model on a cold container can exceed that, so the page
 spawns the work and polls for it. Access is token-gated — the model writes in one
 person's voice and was trained on their friends' messages.
+
+**Public page.** `web/` is a Next.js app for Vercel that lets anyone text the
+model as "CyrusGPT", styled as iMessage on an iPhone. The browser only talks to
+the app's own routes; those hold `STYLE_FT_TOKEN`, validate input, and forward to
+the Modal app above with a bearer header. Spend is bounded in layers: Modal runs
+at most one GPU (`max_containers=1`) and releases it after 2 idle minutes; each
+visitor gets 20 texts a day and 5 a minute; everyone shares 120 a day and 3,000 a
+month, counted in Redis and shown as the status-bar battery; BotID screens
+`/api/send`; and the Modal workspace has a hard spending limit as the last line.
+Replies have phone numbers and emails scrubbed, as a backstop.
+`cd web && cp .env.example .env.local && npm run dev` runs it locally against a
+fake model (`MOCK_MODAL=1`). The spec is
+`docs/superpowers/specs/2026-10-01-public-chat-ui-design.md`.
+
+Before the URL is shared:
+
+1. `STYLE_FT_TOKEN=... modal deploy deploy/serve.py`, and note the `web` URL.
+2. In the Modal dashboard, set a workspace spending limit below the monthly
+   credit. Check the L4 rate on Modal's pricing page and re-derive the caps
+   (spec, section 6) if it is not about $0.80/hr.
+3. `python tools/probe_leaks.py --run <run>` and read all of
+   `outputs/probe_leaks/<run>.jsonl`. If replies contain real names, numbers,
+   addresses or private details, do not launch: fix the data and retrain.
+4. On Vercel: import the repo, set Root Directory to `web`, add Upstash Redis
+   from the Marketplace, and set the variables in `web/.env.example` (not
+   `MOCK_MODAL`) for Production and Preview.
+5. On a Preview deployment, set `DAILY_MESSAGE_CAP=1` and confirm the second
+   text shows the dead-battery state; then put it back.
+6. Text it from a real iPhone, including one cold start.
 
 ---
 
