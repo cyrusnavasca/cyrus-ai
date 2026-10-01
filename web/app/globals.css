@@ -1,0 +1,10 @@
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+/* Desktop: the page around the phone. */
+body { background: #e5e5ea; }
+@media (prefers-color-scheme: dark) { body { background: #1c1c1e; } }
+/* Phone: there is no frame, the chat is the page. */
+@media (max-width: 499px) {
+  body { background: #fff; }
+  @media (prefers-color-scheme: dark) { body { background: #000; } }
+}
