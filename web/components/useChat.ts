@@ -5,9 +5,9 @@ import { isExhausted } from "../lib/budget";
 import { sendTurns } from "../lib/chatClient";
 import { COPY } from "../lib/copy";
 import type { Budget } from "../lib/limits";
-import { type Message, restore, toHistory } from "../lib/thread";
+import { type Message, toHistory } from "../lib/thread";
 
-const STORAGE_KEY = "cyrusgpt:thread:v1";
+const LEGACY_STORAGE_KEY = "cyrusgpt:thread:v1";
 // crypto.randomUUID is missing on non-HTTPS origins and iOS < 15.4.
 const newId = () =>
   typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -21,7 +21,6 @@ export function useChat() {
   const [dead, setDead] = useState(false);
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [hydrated, setHydrated] = useState(false);
   // The latest messages, for async code that outlives a render.
   const ref = useRef<Message[]>([]);
   const busy = useRef(false);
@@ -48,28 +47,16 @@ export function useChat() {
     }
   }, []);
 
+  // The thread lives only in memory, so a refresh starts a new conversation.
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) commit(restore(JSON.parse(raw)));
+      // Drop the copy that earlier versions of this page saved.
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch {
-      // Private mode or blocked storage: start empty.
+      // Blocked storage: nothing was saved there either.
     }
-    setHydrated(true);
     void refreshBudget();
-  }, [commit, refreshBudget]);
-
-  useEffect(() => {
-    // Not until the stored thread has been read back: saving first would
-    // overwrite it with the empty initial state (and StrictMode's re-run of
-    // the restore effect would then read that empty copy back).
-    if (!hydrated) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-    } catch {
-      // Not saved; the conversation still works for this visit.
-    }
-  }, [messages, hydrated]);
+  }, [refreshBudget]);
 
   const send = useCallback(
     async (raw: string) => {
