@@ -34,7 +34,6 @@ export function MessageList({ messages, waitingSince, notice, onRetry }: Props) 
 
   return (
     <div className={styles.log} role="log" aria-live="polite">
-      {messages.length === 0 && <p className={styles.empty}>{COPY.disclaimer}</p>}
       {rows.map((row) =>
         row.type === "time" ? (
           <div key={row.key} className={styles.time}>
