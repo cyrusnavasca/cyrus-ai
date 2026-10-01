@@ -51,6 +51,9 @@ image = (
 # No default on purpose. Failing the deploy is the correct outcome: a missing
 # token should not silently fall back to one an attacker can read in git.
 TOKEN = os.environ["STYLE_FT_TOKEN"]
+if not TOKEN:
+    # An empty token would match a request that sends no credentials at all.
+    raise RuntimeError("STYLE_FT_TOKEN is set but empty")
 
 # Training never saw the label "a friend" - every conversation was with an
 # aliased handle. Using one the model actually met keeps inference in
@@ -334,6 +337,7 @@ class Worker:
 @app.function(image=image, volumes={"/vol": vol}, scaledown_window=300, timeout=300)
 @modal.asgi_app()
 def web():
+    import json
     import sys
 
     import modal as _modal
@@ -367,8 +371,13 @@ def web():
         # now sits on a public proxy, so no field from the body reaches the GPU
         # unchecked: history is trimmed and capped, temperature clamped, and
         # partner limited to names the adapter was trained to meet.
+        # Same 16 KB ceiling as the Vercel proxy: six 300-character turns are
+        # under 4 KB, so anything bigger is not a chat.
+        raw = await request.body()
+        if len(raw) > 16_384:
+            raise HTTPException(status_code=413, detail="body too large")
         try:
-            body = await request.json()
+            body = json.loads(raw)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid json") from exc
         if not isinstance(body, dict):
