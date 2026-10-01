@@ -1,0 +1,27 @@
+{
+  "name": "cyrusgpt-web",
+  "private": true,
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "TZ=UTC vitest run"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.39.0",
+    "botid": "^1.5.11",
+    "next": "^16.3.8",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}
