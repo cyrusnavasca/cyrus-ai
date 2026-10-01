@@ -31,10 +31,6 @@
     border-radius: 55px; border: 12px solid #1c1c1e;
     box-shadow: 0 0 0 2px #3a3a3c, 0 30px 60px rgba(0, 0, 0, 0.25);
   }
-  .phone::after {
-    content: ""; position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
-    width: 134px; height: 5px; border-radius: 3px; background: var(--fg); opacity: 0.9;
-  }
   .island {
     display: block; position: absolute; top: 11px; left: 50%; transform: translateX(-50%);
     width: 122px; height: 35px; border-radius: 20px; background: #000; z-index: 3;
@@ -46,7 +42,9 @@
   }
   .pill { display: none; }
   .disclaimerOutside { display: block; margin: 0; max-width: 390px; text-align: center; font-size: 13px; color: var(--muted); }
-  .inputBar { padding-bottom: 28px; }
+  /* Clear the frame's rounded bottom corners. Two classes, so it beats the
+     base .inputBar padding declared further down. */
+  .phone .inputBar { padding-bottom: 18px; }
 }
 
 .glyphs { display: inline-flex; align-items: center; gap: 6px; }
