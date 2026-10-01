@@ -18,7 +18,7 @@ container can exceed that, so the page spawns the work and polls for it:
 
 Access is gated on a token: this model writes in one specific person's voice and
 was trained on their friends' messages, none of whom agreed to be a public demo.
-STYLE_FT_TOKEN is required at deploy time and has no default - a fallback value
+STYLE_FT_TOKEN lives in a Modal secret and has no default - a fallback value
 committed to a public repo is not a gate, it is a published password.
 
   modal secret create style-ft-token STYLE_FT_TOKEN=<something long and random>
@@ -48,12 +48,10 @@ image = (
     .add_local_dir(REPO / "src" / "style_ft", "/root/style_ft")
 )
 
-# No default on purpose. Failing the deploy is the correct outcome: a missing
-# token should not silently fall back to one an attacker can read in git.
-TOKEN = os.environ["STYLE_FT_TOKEN"]
-if not TOKEN:
-    # An empty token would match a request that sends no credentials at all.
-    raise RuntimeError("STYLE_FT_TOKEN is set but empty")
+# Read inside web(), not here: this module is also imported by every Worker
+# container and by the machine running `modal deploy`, and only web() has the
+# secret attached. Reading it at import time crash-looped every container.
+token_secret = modal.Secret.from_name("style-ft-token")
 
 # Training never saw the label "a friend" - every conversation was with an
 # aliased handle. Using one the model actually met keeps inference in
@@ -338,6 +336,7 @@ class Worker:
 @app.function(
     image=image,
     volumes={"/vol": vol},
+    secrets=[token_secret],
     scaledown_window=300,
     timeout=300,
     max_containers=2,
@@ -355,6 +354,13 @@ def web():
     sys.path.insert(0, "/root")
     from style_ft.serving.guard import clamp_temperature, clean_history, pick_partner
 
+    # No default on purpose: a missing token must not fall back to one an
+    # attacker can read in git, and an empty one would match a request that
+    # sends no credentials at all.
+    token = os.environ.get("STYLE_FT_TOKEN", "")
+    if not token:
+        raise RuntimeError("STYLE_FT_TOKEN missing or empty in the style-ft-token secret")
+
     api = FastAPI()
 
     def check(request: Request) -> None:
@@ -363,7 +369,7 @@ def web():
         # was right.
         auth = request.headers.get("authorization", "")
         given = auth[7:] if auth[:7].lower() == "bearer " else request.query_params.get("k", "")
-        if not hmac.compare_digest(given.encode(), TOKEN.encode()):
+        if not hmac.compare_digest(given.encode(), token.encode()):
             raise HTTPException(status_code=401, detail="bad or missing token")
 
     @api.get("/", response_class=HTMLResponse)
