@@ -27,6 +27,7 @@ committed to a public repo is not a gate, it is a published password.
 # No `from __future__ import annotations`: it turns route annotations into
 # strings, and FastAPI cannot resolve `Request` because that import lives inside
 # the function - every route then 422s with "query.request field required".
+import hmac
 import os
 import pathlib
 
@@ -232,9 +233,14 @@ def runs() -> list:
     image=image,
     gpu="L4",
     volumes={"/vol": vol, "/root/.cache/huggingface": hf_cache},
-    # Long enough that a conversation never re-pays the cold start, short enough
-    # that a forgotten tab does not burn credit overnight.
-    scaledown_window=600,
+    # The public page shares a $30/month credit, so idle GPU time is the main
+    # cost. 120s still covers the gap between texts in one conversation, and an
+    # abandoned tab stops billing two minutes later instead of ten.
+    scaledown_window=120,
+    # One GPU, ever. A burst of visitors queues behind it instead of renting more
+    # L4s; the proxy's budget counters assume spend scales with messages, not
+    # with concurrency.
+    max_containers=1,
     timeout=1800,
 )
 class Worker:
@@ -262,7 +268,7 @@ class Worker:
 
     @modal.method()
     def reply(self, history: list, run: str, partner: str = DEFAULT_PARTNER,
-              temperature: float = TEMPERATURE) -> dict:
+              temperature: float = TEMPERATURE, redact_output: bool = True) -> dict:
         import json
         import time
 
@@ -313,6 +319,13 @@ class Worker:
         reply = tokenizer.decode(
             out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
         ).strip()
+        if redact_output:
+            # Backstop for memorized contact details reaching a public page.
+            # tools/probe_leaks.py turns it off to see what the model would say
+            # unfiltered; the web endpoint never forwards this flag.
+            from style_ft.serving.guard import redact
+
+            reply = redact(reply)
         return {"reply": reply, "seconds": time.time() - started}
 
 
@@ -321,15 +334,25 @@ class Worker:
 @app.function(image=image, volumes={"/vol": vol}, scaledown_window=300, timeout=300)
 @modal.asgi_app()
 def web():
+    import sys
+
     import modal as _modal
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import HTMLResponse, JSONResponse
 
+    sys.path.insert(0, "/root")
+    from style_ft.serving.guard import clamp_temperature, clean_history, pick_partner
+
     api = FastAPI()
 
     def check(request: Request) -> None:
-        if request.query_params.get("k") != TOKEN:
-            raise HTTPException(status_code=401, detail="bad or missing ?k= token")
+        # The Vercel proxy sends a bearer header; the private page still uses ?k=.
+        # compare_digest so response timing does not leak how much of a guess
+        # was right.
+        auth = request.headers.get("authorization", "")
+        given = auth[7:] if auth[:7].lower() == "bearer " else request.query_params.get("k", "")
+        if not hmac.compare_digest(given.encode(), TOKEN.encode()):
+            raise HTTPException(status_code=401, detail="bad or missing token")
 
     @api.get("/", response_class=HTMLResponse)
     def index(request: Request):
@@ -340,15 +363,29 @@ def web():
     @api.post("/generate")
     async def generate(request: Request):
         check(request)
-        body = await request.json()
-        history = body.get("history") or []
+        # Everything below is reachable by anyone holding the token, and the token
+        # now sits on a public proxy, so no field from the body reaches the GPU
+        # unchecked: history is trimmed and capped, temperature clamped, and
+        # partner limited to names the adapter was trained to meet.
+        try:
+            body = await request.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid json") from exc
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="body must be an object")
+        try:
+            history = clean_history(body.get("history"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         run = body.get("run") or ""
-        if not history or run not in runs():
-            raise HTTPException(status_code=400, detail="unknown run or empty history")
-        partner = body.get("partner") or DEFAULT_PARTNER
-        temperature = float(body.get("temperature") or TEMPERATURE)
-        call = Worker().reply.spawn(history=history, run=run, partner=partner,
-                                    temperature=temperature)
+        if run not in runs():
+            raise HTTPException(status_code=400, detail="unknown run")
+        call = Worker().reply.spawn(
+            history=history,
+            run=run,
+            partner=pick_partner(body.get("partner"), (DEFAULT_PARTNER,), DEFAULT_PARTNER),
+            temperature=clamp_temperature(body.get("temperature")),
+        )
         return JSONResponse({"id": call.object_id})
 
     @api.get("/result")
