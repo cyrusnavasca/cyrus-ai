@@ -66,6 +66,6 @@ describe("formatTimeHeader", () => {
   });
 
   it("never emits a narrow no-break space", () => {
-    expect(formatTimeHeader(T0, T0 + MIN)).not.toMatch(/ /);
+    expect(formatTimeHeader(T0, T0 + MIN).includes(String.fromCharCode(0x202f))).toBe(false);
   });
 });

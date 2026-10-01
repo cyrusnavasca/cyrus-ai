@@ -26,7 +26,8 @@
 @media (min-width: 500px) {
   .stage { padding: 24px 16px; gap: 16px; }
   .phone {
-    width: 390px; height: min(844px, calc(100dvh - 96px)); min-height: 600px;
+    /* 390x844 screen plus the 12px bezel on each side */
+    width: 414px; height: min(868px, calc(100dvh - 96px)); min-height: 600px;
     border-radius: 55px; border: 12px solid #1c1c1e;
     box-shadow: 0 0 0 2px #3a3a3c, 0 30px 60px rgba(0, 0, 0, 0.25);
   }

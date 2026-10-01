@@ -16,10 +16,10 @@ export function useChat() {
   const [dead, setDead] = useState(false);
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   // The latest messages, for async code that outlives a render.
   const ref = useRef<Message[]>([]);
   const busy = useRef(false);
-  const loaded = useRef(false);
 
   const commit = useCallback((next: Message[]) => {
     ref.current = next;
@@ -50,18 +50,21 @@ export function useChat() {
     } catch {
       // Private mode or blocked storage: start empty.
     }
-    loaded.current = true;
+    setHydrated(true);
     void refreshBudget();
   }, [commit, refreshBudget]);
 
   useEffect(() => {
-    if (!loaded.current) return;
+    // Not until the stored thread has been read back: saving first would
+    // overwrite it with the empty initial state (and StrictMode's re-run of
+    // the restore effect would then read that empty copy back).
+    if (!hydrated) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
     } catch {
       // Not saved; the conversation still works for this visit.
     }
-  }, [messages]);
+  }, [messages, hydrated]);
 
   const send = useCallback(
     async (raw: string) => {
