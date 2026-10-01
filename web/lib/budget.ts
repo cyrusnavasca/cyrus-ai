@@ -4,7 +4,7 @@ export type BatteryColor = "green" | "yellow" | "red";
 
 export function batteryLevel(b: Budget | null): number | null {
   if (!b) return null;
-  return Math.min(1, Math.max(0, 1 - b.today.used / b.today.cap));
+  return Math.min(1, Math.max(0, (b.today.cap - b.today.used) / b.today.cap));
 }
 
 // iOS: green above 20%, yellow from 20% down to 10%, red below 10%.

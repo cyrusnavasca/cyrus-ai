@@ -15,6 +15,8 @@ describe("budget display", () => {
     expect(batteryColor(0.2)).toBe("yellow");
     expect(batteryColor(0.1)).toBe("yellow");
     expect(batteryColor(0.05)).toBe("red");
+    expect(batteryColor(batteryLevel(b(108)) as number)).toBe("yellow");
+    expect(batteryColor(batteryLevel(b(96)) as number)).toBe("yellow");
   });
 
   it("is exhausted when today or the month is used up", () => {

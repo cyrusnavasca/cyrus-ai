@@ -64,9 +64,9 @@ export function restore(raw: unknown): Message[] {
   return out;
 }
 
-// Newer ICU puts a narrow no-break space before AM/PM; normalize it.
+// Newer ICU puts a narrow no-break space (U+202F) before AM/PM; \s matches it.
 const clock = (d: Date) =>
-  d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(/ /g, " ");
+  d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(/\s/g, " ");
 
 export function formatTimeHeader(at: number, now: number): string {
   const d = new Date(at);

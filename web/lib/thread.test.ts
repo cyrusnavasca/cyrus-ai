@@ -64,4 +64,8 @@ describe("formatTimeHeader", () => {
     expect(formatTimeHeader(T0 - 24 * 60 * MIN, T0)).toBe("Yesterday 9:41 PM");
     expect(formatTimeHeader(T0 - 3 * 24 * 60 * MIN, T0)).toBe("Mon, Sep 28 at 9:41 PM");
   });
+
+  it("never emits a narrow no-break space", () => {
+    expect(formatTimeHeader(T0, T0 + MIN)).not.toMatch(/ /);
+  });
 });
