@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { COPY } from "../lib/copy";
 import { MAX_CHARS } from "../lib/validate";
 import styles from "./chat.module.css";
+import { PlusMenu } from "./PlusMenu";
 
 const COUNTER_AFTER = 250;
 
@@ -27,9 +28,7 @@ export function InputBar({ onSend, busy }: { onSend: (text: string) => void; bus
         submit();
       }}
     >
-      <button type="button" className={styles.plus} disabled tabIndex={-1} aria-hidden>
-        +
-      </button>
+      <PlusMenu />
       <div className={styles.field}>
         <textarea
           ref={box}
